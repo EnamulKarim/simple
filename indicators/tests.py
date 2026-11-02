@@ -626,6 +626,47 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(
             compute_SL14('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
 
+    def test_phd_sl5_maps_free_text_commodity_names(self):
+        """SL5c/SL5d must match the real free-text item names (HBsAg / HCV),
+        not the literal strings 'hepatitis b' / 'hepatitis c' which never appear.
+        Penicillin injections are syphilis treatment and must NOT count as a
+        syphilis test kit (SL5b). Pending rows excluded."""
+        from programs.models import ServiceCenter, StockEntry
+        from indicators.phd import (compute_SL5a, compute_SL5b, compute_SL5c,
+                                     compute_SL5d, compute_SL5e)
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-Stock', code='STK-1',
+            center_type=ServiceCenter.BROTHEL, district='Tangail')
+
+        def stock(name, issued, status=StockEntry.APPROVED, month=date(2026, 6, 1)):
+            StockEntry.objects.create(
+                organisation='PHD', center=centre, reporting_month=month,
+                item_name=name, quantity_issued=issued, approval_status=status)
+
+        # Hep B — all three are the HBsAg surface-antigen test under different names.
+        stock('HBsAg kits', 50)
+        stock('HbsAG', 9, month=date(2026, 7, 1))
+        stock('Hepatitis B kits', 1, month=date(2026, 8, 1))   # also hep B
+        # Hep C — HCV antibody test, varied spelling.
+        stock('HCV kits', 40)
+        stock('Hepatitis C', 2, month=date(2026, 7, 1))        # also hep C
+        # Syphilis test kit — counts; penicillin treatment — must NOT.
+        stock('Syphilis kits', 30)
+        stock('Inj. Benjapen-12Lac', 100)                      # treatment, excluded
+        # Condoms and HIV.
+        stock('Condom ( Free)', 500)
+        stock('Determine HIV1/2', 70)
+        # A pending HBsAg row must be excluded.
+        stock('HBsAg kits', 999, status=StockEntry.PENDING, month=date(2026, 9, 1))
+
+        P = (date(2026, 5, 21), date(2026, 11, 20))
+        self.assertEqual(compute_SL5c('PHD', *P), 60)   # 50 + 9 + 1, pending excluded
+        self.assertEqual(compute_SL5d('PHD', *P), 42)   # 40 + 2
+        self.assertEqual(compute_SL5b('PHD', *P), 30)   # syphilis kit only, NOT penicillin
+        self.assertEqual(compute_SL5a('PHD', *P), 500)
+        self.assertEqual(compute_SL5e('PHD', *P), 70)
+
     def test_phd_sl15a_counts_message_boards(self):
         from programs.models import IECMaterial
         from partners.models import Partner

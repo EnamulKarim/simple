@@ -99,33 +99,60 @@ def compute_SL4(org, period_start, period_end):
 
 
 # ── SL5 — Essential SRHR & GBV supplies (5 commodity sub-rows) ───────────────
-def _kit_issued(org, period_start, period_end, fragment):
+# StockEntry.item_name is operator-entered FREE TEXT with dozens of spelling
+# variants ("HBsAg", "HbsAG", "HBSag Tast kit", "Hepatitis B kits", ...) and the
+# item_category dropdown is unused — every PHD row is category 'Other'. So the
+# only reliable classifier is a case-insensitive match on name fragments. Each
+# commodity maps to a TUPLE of fragments (OR'd); the fragment sets are mutually
+# exclusive so nothing is double-counted. The naming is the health reality:
+#   Hep B  → "HBsAg" (surface-antigen test), NOT "hepatitis b"
+#   Hep C  → "HCV"   (antibody test),        NOT "hepatitis c"
+# Penicillin injections ("Inj. Benjapen") are syphilis TREATMENT, not a test
+# kit, and are deliberately excluded from SL5b. Lubricant/gel is not a SIDA SL5
+# commodity row (that sheet lists condoms) and is excluded from SL5a.
+SL5_COMMODITY_FRAGMENTS = {
+    'SL5a': ('condom',),               # condoms (incl. "Free Condom", "Condom ( Free)")
+    'SL5b': ('syphilis',),             # syphilis test kits / quick strips
+    'SL5c': ('hbsag', 'hepatitis b'),  # Hep B surface-antigen test
+    'SL5d': ('hcv', 'hepatitis c'),    # Hep C antibody test
+    'SL5e': ('hiv',),                  # HIV test kits (incl. "Determine HIV1/2")
+}
+
+
+def _kit_issued(org, period_start, period_end, fragments):
+    """Sum quantity_issued of approved StockEntry rows whose item_name contains
+    ANY of `fragments` (case-insensitive). Accepts a single string or an
+    iterable of strings."""
+    if isinstance(fragments, str):
+        fragments = (fragments,)
+    name_q = Q()
+    for frag in fragments:
+        name_q |= Q(item_name__icontains=frag)
     return StockEntry.objects.filter(
         organisation=org,
         approval_status=APPROVED,   # only manager-approved stock counts (system rule)
         reporting_month__range=(period_start, period_end),
-        item_name__icontains=fragment,
-    ).aggregate(t=Sum('quantity_issued'))['t'] or 0
+    ).filter(name_q).aggregate(t=Sum('quantity_issued'))['t'] or 0
 
 
 def compute_SL5a(org, period_start, period_end):   # condoms
-    return _kit_issued(org, period_start, period_end, 'condom')
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5a'])
 
 
 def compute_SL5b(org, period_start, period_end):   # syphilis
-    return _kit_issued(org, period_start, period_end, 'syphilis')
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5b'])
 
 
 def compute_SL5c(org, period_start, period_end):   # hep B
-    return _kit_issued(org, period_start, period_end, 'hepatitis b')
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5c'])
 
 
 def compute_SL5d(org, period_start, period_end):   # hep C
-    return _kit_issued(org, period_start, period_end, 'hepatitis c')
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5d'])
 
 
 def compute_SL5e(org, period_start, period_end):   # HIV kits
-    return _kit_issued(org, period_start, period_end, 'hiv')
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5e'])
 
 
 # ── SL6 — HIV/STI positive cases referred and enrolled in treatment ──────────
