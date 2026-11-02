@@ -472,6 +472,50 @@ class NewComputeFunctionsTest(TestCase):
         n = compute_I_BND_1_1('Bandhu', date(2026, 5, 21), date(2026, 11, 20))
         self.assertEqual(n, 2)   # the two named registrations only
 
+    def test_phd_sl1r_counts_registry_not_screening(self):
+        """PHD 'FSWs reached' headline (SL1R) = the Mother List registry
+        (distinct approved, non-stub PHD clients), measured like Bandhu 1.1 —
+        NOT the SL1 screening-service count. SL1 stays the narrower indicator."""
+        from programs.models import ServiceCenter, Client, ClinicVisit
+        from indicators.phd import compute_SL1R, compute_SL1
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-REG', code='REG-1',
+            center_type=ServiceCenter.BROTHEL, district='Rajbari')
+        # Three registered FSWs (approved, named) — the registry.
+        reg = [Client.objects.create(organisation='PHD', center=centre,
+                                     client_id='1-000%d' % i, name='F%d' % i,
+                                     approval_status=Client.APPROVED)
+               for i in range(3)]
+        # A stub (service log cited an unregistered id) — must NOT count.
+        Client.objects.create(organisation='PHD', center=centre,
+                              client_id='1-STUB', name='Unknown',
+                              approval_status=Client.APPROVED)
+        # A pending registration — must NOT count.
+        Client.objects.create(organisation='PHD', center=centre,
+                              client_id='1-PEND', name='Pending',
+                              approval_status=Client.PENDING)
+        # Only ONE of the three has actually received a screening service.
+        ClinicVisit.objects.create(organisation='PHD', center=centre,
+                                   client=reg[0], visit_date=date(2026, 6, 2),
+                                   hiv_screening_done=True,
+                                   approval_status=ClinicVisit.APPROVED)
+        P = (date(2026, 5, 21), date(2026, 11, 20))
+        self.assertEqual(compute_SL1R('PHD', *P), 3)   # registry = 3 named approved
+        self.assertEqual(compute_SL1('PHD', *P), 1)    # screening service = 1
+
+    def test_phd_registry_kpi_shape(self):
+        """The headline KPI row is SL1R, carries the 3,500 target, and is linked
+        (so the card renders a real percentage, not a 'module pending' tag)."""
+        from indicators.service import get_phd_registry_kpi
+        from datetime import date
+        row = get_phd_registry_kpi(date(2026, 5, 21), date(2026, 11, 20),
+                                   date(2026, 11, 2))
+        self.assertEqual(row['activity_code'], 'SL1R')
+        self.assertEqual(row['target_value'], 3500.0)
+        self.assertFalse(row['unlinked'])
+        self.assertIsNone(row['month_target'])
+
     def test_phd_sl15a_counts_message_boards(self):
         from programs.models import IECMaterial
         from partners.models import Partner

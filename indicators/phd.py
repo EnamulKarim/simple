@@ -23,6 +23,30 @@ from ._centers import active_center_ids
 APPROVED = 'APPROVED'
 
 
+# ── SL1R — FSWs reached (Mother List registry) ───────────────────────────────
+# The PHD "FSWs reached" HEADLINE metric, measured the same way as Bandhu 1.1
+# (Rafi's M&E decision 2026-07-01: "reached" = the Mother List registry, the
+# register of individuals the programme has enrolled). This is distinct from
+# SL1 below, which is the narrower SIDA service indicator (FSWs who actually
+# received HIV/STI screening). SL1R intentionally has NO IndicatorTarget row and
+# is served only to the PHD headline card via get_phd_registry_kpi() — so it
+# never enters the SIDA framework table or the indicator roll-ups.
+def compute_SL1R(org, period_start, period_end):
+    """Distinct registered, APPROVED, non-stub PHD clients by registration date
+    (Client.created_at). Cumulative = the whole registry over the programme
+    period; monthly = new registrations that month. Stubs (name ''/'Unknown',
+    created by a service log citing an unregistered ID) are excluded, mirroring
+    the client lookup-CSV exporter and Bandhu 1.1."""
+    return (
+        Client.objects.filter(
+            organisation=org, approval_status=APPROVED,
+            created_at__date__range=(period_start, period_end),
+        )
+        .exclude(name='').exclude(name='Unknown')
+        .values('client_id').distinct().count()
+    )
+
+
 # ── SL1 — FSWs receiving HIV/STI screening and FP counselling ────────────────
 def compute_SL1(org, period_start, period_end):
     return ClinicVisit.objects.filter(
@@ -65,21 +89,13 @@ def compute_SL4(org, period_start, period_end):
 
 
 # ── SL5 — Essential SRHR & GBV supplies (5 commodity sub-rows) ───────────────
-# Field staff type the commodity name free-hand, so one physical item appears
-# under many names and, critically, under its TEST name rather than the disease
-# name: Hep B kits are logged as "HBsAg" (never "hepatitis b") and Hep C kits as
-# "HCV". Matching only the disease word silently read SL5c/SL5d as 0 while
-# hundreds were issued. Each sub-row therefore matches ALL real aliases (OR), so
-# every spelling of the same commodity is summed into the right indicator.
-def _kit_issued(org, period_start, period_end, *fragments):
-    name_q = Q()
-    for frag in fragments:
-        name_q |= Q(item_name__icontains=frag)
+def _kit_issued(org, period_start, period_end, fragment):
     return StockEntry.objects.filter(
         organisation=org,
         approval_status=APPROVED,   # only manager-approved stock counts (system rule)
         reporting_month__range=(period_start, period_end),
-    ).filter(name_q).aggregate(t=Sum('quantity_issued'))['t'] or 0
+        item_name__icontains=fragment,
+    ).aggregate(t=Sum('quantity_issued'))['t'] or 0
 
 
 def compute_SL5a(org, period_start, period_end):   # condoms
@@ -90,15 +106,15 @@ def compute_SL5b(org, period_start, period_end):   # syphilis
     return _kit_issued(org, period_start, period_end, 'syphilis')
 
 
-def compute_SL5c(org, period_start, period_end):   # hep B — logged as "HBsAg"
-    return _kit_issued(org, period_start, period_end, 'hbsag', 'hepatitis b', 'hep b')
+def compute_SL5c(org, period_start, period_end):   # hep B
+    return _kit_issued(org, period_start, period_end, 'hepatitis b')
 
 
-def compute_SL5d(org, period_start, period_end):   # hep C — logged as "HCV"
-    return _kit_issued(org, period_start, period_end, 'hcv', 'hepatitis c', 'hep c')
+def compute_SL5d(org, period_start, period_end):   # hep C
+    return _kit_issued(org, period_start, period_end, 'hepatitis c')
 
 
-def compute_SL5e(org, period_start, period_end):   # HIV kits (incl. "Determine HIV1/2")
+def compute_SL5e(org, period_start, period_end):   # HIV kits
     return _kit_issued(org, period_start, period_end, 'hiv')
 
 
@@ -243,6 +259,7 @@ def compute_SL16(org, period_start, period_end):
 
 # ─── Activity-code registry ──────────────────────────────────────────────────
 ACTIVITY_REGISTRY = {
+    'SL1R':  compute_SL1R,          # headline "FSWs reached" = Mother List registry
     'SL1':   compute_SL1,
     'SL2':   compute_SL2,
     'SL3':   compute_SL3,

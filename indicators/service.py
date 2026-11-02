@@ -261,6 +261,40 @@ def get_partner_indicator_progress(partner_code: str, period_start, period_end,
     return results
 
 
+PHD_REGISTRY_CODE = 'SL1R'
+PHD_REGISTRY_TARGET = 3500   # mirrors SL1's programme "FSWs reached" target
+
+
+def get_phd_registry_kpi(period_start, period_end, today) -> dict:
+    """PHD headline "FSWs reached" = the Mother List registry (distinct
+    approved, non-stub PHD clients), measured like Bandhu 1.1.
+
+    Returned as a single IndicatorProgress-shaped row (code SL1R) so the PHD
+    headline card can read it exactly like any other indicator. It is NOT an
+    IndicatorTarget row, so it never enters get_partner_indicator_progress() —
+    the SIDA framework table, the home roll-up, and the indicator mean stay
+    unchanged. SL1 remains the narrower screening-service indicator.
+    """
+    cumulative, _ = _compute_achievement(
+        'PHD', PHD_REGISTRY_CODE, period_start, period_end)
+    month_ach, _ = _compute_monthly('PHD', PHD_REGISTRY_CODE, today)
+    return {
+        'activity_code':     PHD_REGISTRY_CODE,
+        'objective_number':  0,
+        'activity_label':    'Enrol FSWs onto the Mother List registry',
+        'indicator_label':   'FSWs registered on the Mother List',
+        'target_value':      float(PHD_REGISTRY_TARGET),
+        'unit':              'FSWs',
+        'achievement':       cumulative,
+        'percentage':        _percentage(cumulative, PHD_REGISTRY_TARGET),
+        'unlinked':          False,
+        'month_label':       today.strftime('%Y-%m') if today else None,
+        'month_target':      None,   # no UNFPA-set monthly slice for the registry
+        'month_achievement': month_ach,
+        'month_percentage':  None,
+    }
+
+
 def get_indicator_progress(partner_code: str, activity_code: str,
                            period_start=None, period_end=None,
                            today=None) -> dict:

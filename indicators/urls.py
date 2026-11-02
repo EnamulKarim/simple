@@ -6,6 +6,7 @@ from .views import (
     IndicatorRecordsView,
     IndicatorTargetViewSet,
     KoboFormMappingViewSet,
+    PhdRegistryKpiView,
     SingleIndicatorProgressView,
 )
 
@@ -15,6 +16,7 @@ router.register('kobo-forms', KoboFormMappingViewSet, basename='kobo-form')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('phd-registry/', PhdRegistryKpiView.as_view(), name='indicator-phd-registry'),
     path('progress/', IndicatorProgressView.as_view(), name='indicator-progress'),
     path('progress/<str:code>/', SingleIndicatorProgressView.as_view(), name='indicator-progress-single'),
     path('records/', IndicatorRecordsView.as_view(), name='indicator-records'),

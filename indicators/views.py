@@ -143,6 +143,32 @@ class IndicatorProgressView(views.APIView):
         return Response(serializer.data)
 
 
+class PhdRegistryKpiView(views.APIView):
+    """
+    GET /api/indicators/phd-registry/
+    The PHD "FSWs reached" headline = the Mother List registry (distinct
+    approved, non-stub PHD clients), returned as one IndicatorProgress-shaped
+    row (code SL1R). Deliberately kept out of /progress/ so the SIDA framework
+    table and roll-ups are unaffected; only the PHD headline card reads this.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.utils import timezone
+        from .service import get_phd_registry_kpi
+
+        org, period_start, period_end = _resolve_params(request)
+        # PHD-only KPI: all-orgs users (org is None) and PHD readers may see it;
+        # a Bandhu-only manager may not.
+        if org not in (None, 'PHD'):
+            return Response({'detail': 'Access denied.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        row = get_phd_registry_kpi(period_start, period_end,
+                                   timezone.now().date())
+        row['organisation'] = 'PHD'
+        return Response(row)
+
+
 class SingleIndicatorProgressView(views.APIView):
     """
     GET /api/indicators/progress/<code>/

@@ -4,7 +4,11 @@
  * Replaces the legacy fistula-era hero tiles (Submissions / ANC / Active
  * Workers / Fistula Cases) with the five marquee indicators PHD confirmed:
  *
- *   1. FSWs receiving integrated SRHR & HIV services   [SL#1]  → code 1.1   (number)
+ *   1. FSWs reached = the Mother List registry           [SL1R]  → registry (number)
+ *      (distinct approved, non-stub PHD clients — measured like Bandhu 1.1,
+ *       NOT the SL1 screening-service count. Served by a dedicated endpoint,
+ *       /indicators/phd-registry/, so the SIDA framework table + roll-ups are
+ *       untouched; SL1 stays the narrower screening indicator in that table.)
  *   2. Wellness centres providing SRHR services        [SL#8]  → code 1.7   (ring)
  *   3. Outreach services conducted                     [SL#4]  → code 1.4   (number)
  *   4. Health providers capacitated                    [SL#10-13] → 2.1a+2.1b+2.2+2.3 (number, summed)
@@ -45,7 +49,7 @@ interface CardDef {
 }
 
 const CARDS: CardDef[] = [
-  { key: 'fsws',      kind: 'number', codes: ['SL1'],                          label: 'FSWs reached',          sub: 'Integrated SRHR & HIV services', sl: 'SL1',     icon: <HeartPulse size={15} /> },
+  { key: 'fsws',      kind: 'number', codes: ['SL1R'],                         label: 'FSWs reached',          sub: 'Registered on the Mother List',  sl: 'PHD-1',   icon: <HeartPulse size={15} /> },
   { key: 'centres',   kind: 'ring',   codes: ['SL8'],                          label: 'Wellness centres',      sub: 'Providing SRHR services',        sl: 'SL8',     icon: <Home size={15} /> },
   { key: 'outreach',  kind: 'number', codes: ['SL4'],                          label: 'Outreach sessions',     sub: 'SRHR / HIV / GBV awareness',     sl: 'SL4',     icon: <Megaphone size={15} /> },
   { key: 'providers', kind: 'number', codes: ['SL10', 'SL11', 'SL12', 'SL13'], label: 'Service Providers Trained', sub: 'Gender-sensitive SRHR training', sl: 'SL10–13', icon: <GraduationCap size={15} /> },
@@ -254,8 +258,18 @@ export function PhdHeadlineCards() {
     let cancelled = false
     async function load() {
       try {
-        const res = await api.get<IndicatorProgress[]>('/indicators/progress/?org=PHD')
-        if (!cancelled) setRows(Array.isArray(res.data) ? res.data : [])
+        // The five SIDA cards come from the shared indicator feed; the "FSWs
+        // reached" headline (SL1R) comes from its own endpoint — the Mother
+        // List registry, kept out of the feed so the framework table and
+        // roll-ups are unaffected. Merge the registry row in as code SL1R.
+        const [feed, reg] = await Promise.all([
+          api.get<IndicatorProgress[]>('/indicators/progress/?org=PHD'),
+          api.get<IndicatorProgress>('/indicators/phd-registry/?org=PHD').catch(() => null),
+        ])
+        if (cancelled) return
+        const merged = Array.isArray(feed.data) ? [...feed.data] : []
+        if (reg && reg.data) merged.push(reg.data)
+        setRows(merged)
       } catch {
         if (!cancelled) setRows([])
       }
