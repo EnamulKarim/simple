@@ -17,6 +17,7 @@ from programs.models import (
     GroupEducationSession,
     ServiceCenter, TrainingEvent, StockEntry, IECMaterial,
     GBVCornerRecord, PHDCounsellingReport,
+    MobileHealthCamp, CoordMeeting,
 )
 from ._centers import active_center_ids
 
@@ -173,11 +174,15 @@ def compute_SL8(org, period_start, period_end):
 
 # ── SL9 — Mobile health camps conducted ──────────────────────────────────────
 def compute_SL9(org, period_start, period_end):
-    return TrainingEvent.objects.filter(
+    # Mobile health camps are their own model (MobileHealthCamp), submitted via
+    # the phd_activity_ops form, NOT a TrainingEvent. The old filter
+    # (event_type='camp') could never match — 'camp' is not a TrainingEvent
+    # event_type (choices are orientation/training/workshop), so SL9 was stuck at
+    # 0 regardless of how many camps were reported.
+    return MobileHealthCamp.objects.filter(
         organisation=org,
         approval_status=APPROVED,
-        event_date__range=(period_start, period_end),
-        event_type='camp',
+        camp_date__range=(period_start, period_end),
     ).count()
 
 
@@ -226,11 +231,14 @@ def compute_SL13(org, period_start, period_end):
 
 # ── SL14 — Quarterly coordination meetings ───────────────────────────────────
 def compute_SL14(org, period_start, period_end):
-    return TrainingEvent.objects.filter(
+    # Coordination meetings are their own model (CoordMeeting), submitted via the
+    # phd_activity_ops form, NOT a TrainingEvent. The old filter
+    # (event_type='coord_meeting') could never match a TrainingEvent event_type
+    # (orientation/training/workshop), so SL14 was stuck at 0.
+    return CoordMeeting.objects.filter(
         organisation=org,
         approval_status=APPROVED,
-        event_date__range=(period_start, period_end),
-        event_type='coord_meeting',
+        meeting_date__range=(period_start, period_end),
     ).count()
 
 

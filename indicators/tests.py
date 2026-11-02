@@ -575,6 +575,57 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(
             compute_SL3('PHD', date(2026, 5, 21), date(2026, 11, 20)), 7)
 
+    def test_phd_sl9_counts_mobile_health_camps_not_training_events(self):
+        """SL9 = approved MobileHealthCamp rows in the period. A TrainingEvent
+        (any event_type) must NOT count — the old filter event_type='camp' could
+        never match and left SL9 stuck at 0."""
+        from programs.models import (ServiceCenter, MobileHealthCamp,
+                                      TrainingEvent)
+        from indicators.phd import compute_SL9
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-Camp', code='CAMP-1',
+            center_type=ServiceCenter.BROTHEL, district='Tangail')
+        MobileHealthCamp.objects.create(
+            organisation='PHD', center=centre, camp_date=date(2026, 6, 10),
+            approval_status=MobileHealthCamp.APPROVED)
+        MobileHealthCamp.objects.create(
+            organisation='PHD', center=centre, camp_date=date(2026, 7, 10),
+            approval_status=MobileHealthCamp.APPROVED)
+        # Pending camp excluded.
+        MobileHealthCamp.objects.create(
+            organisation='PHD', center=centre, camp_date=date(2026, 8, 10),
+            approval_status=MobileHealthCamp.PENDING)
+        # A training event must NOT be miscounted as a camp.
+        TrainingEvent.objects.create(
+            organisation='PHD', event_date=date(2026, 6, 15),
+            event_type='training', total_participants=5,
+            approval_status=TrainingEvent.APPROVED)
+        self.assertEqual(
+            compute_SL9('PHD', date(2026, 5, 21), date(2026, 11, 20)), 2)
+
+    def test_phd_sl14_counts_coord_meetings_not_training_events(self):
+        """SL14 = approved CoordMeeting rows in the period. A TrainingEvent must
+        NOT count — the old filter event_type='coord_meeting' never matched."""
+        from programs.models import CoordMeeting, TrainingEvent
+        from indicators.phd import compute_SL14
+        from datetime import date
+        CoordMeeting.objects.create(
+            organisation='PHD', meeting_date=date(2026, 6, 5),
+            meeting_type=CoordMeeting.GOB, meeting_notes='dummy.pdf',
+            approval_status=CoordMeeting.APPROVED)
+        # Pending meeting excluded.
+        CoordMeeting.objects.create(
+            organisation='PHD', meeting_date=date(2026, 7, 5),
+            meeting_type=CoordMeeting.GOB, meeting_notes='dummy.pdf',
+            approval_status=CoordMeeting.PENDING)
+        TrainingEvent.objects.create(
+            organisation='PHD', event_date=date(2026, 6, 20),
+            event_type='training', total_participants=3,
+            approval_status=TrainingEvent.APPROVED)
+        self.assertEqual(
+            compute_SL14('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
+
     def test_phd_sl15a_counts_message_boards(self):
         from programs.models import IECMaterial
         from partners.models import Partner

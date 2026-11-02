@@ -9,6 +9,7 @@ from .models import (
     Referral,
     StockEntry, TemperatureLog, SafetyHygieneKit, StoreRequisition,
     TrainingEvent, CoordMeeting, MobileHealthCamp, VisitorRegister,
+    PHDCounsellingReport,
 )
 
 
@@ -234,3 +235,14 @@ class IECMaterialAdmin(admin.ModelAdmin):
     date_hierarchy = 'date_distributed'
     search_fields = ['district', 'notes']
     raw_id_fields = ['center', 'submitted_by', 'approved_by']
+
+
+@admin.register(PHDCounsellingReport)
+class PHDCounsellingReportAdmin(admin.ModelAdmin):
+    """PHD monthly counselling aggregate (phd_service_log `sec_counsel`).
+    mh_count is the source for indicator SL3 (MH counselling sessions)."""
+    list_display = ['organisation', 'report_date', 'prepared_by', 'mh_count',
+                    'group_mh_count', 'gbv_count', 'total_count', 'approval_status']
+    list_filter = ['organisation', 'approval_status']
+    date_hierarchy = 'report_date'
+    search_fields = ['prepared_by', 'note']
