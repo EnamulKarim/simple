@@ -16,7 +16,7 @@ from programs.models import (
     Client, ClinicVisit, HIVSTITestResult, Referral,
     GroupEducationSession,
     ServiceCenter, TrainingEvent, StockEntry, IECMaterial,
-    GBVCornerRecord,
+    GBVCornerRecord, PHDCounsellingReport,
 )
 from ._centers import active_center_ids
 
@@ -60,23 +60,32 @@ def compute_SL1(org, period_start, period_end):
 
 # ── SL2 — GBV survivors identified and referred for services ─────────────────
 def compute_SL2(org, period_start, period_end):
+    # "Identified AND referred" = the GBV REFERRAL action (referral_gbv), NOT the
+    # routine GBV screening tick. gbv_screening_done is recorded on ~97% of PHD
+    # visits, so the old `screening OR referral` term counted nearly every
+    # screened FSW as a GBV survivor (verified 2 Nov 2026: 2309/2370 screened vs
+    # 1 actually referred). The referral is the service this indicator measures,
+    # consistent with SL7's use of referral_mental_health.
     return ClinicVisit.objects.filter(
         organisation=org,
         approval_status=APPROVED,
         visit_date__range=(period_start, period_end),
-    ).filter(
-        Q(gbv_screening_done=True) | Q(referral_gbv=True)
+        referral_gbv=True,
     ).values('client_id').distinct().count()
 
 
 # ── SL3 — FSWs receiving mental health counselling sessions ──────────────────
 def compute_SL3(org, period_start, period_end):
-    return ClinicVisit.objects.filter(
+    # "Receiving MH counselling sessions" comes from the PHD monthly Counselling
+    # Report (PHDCounsellingReport.mh_count — individual MH counselling), NOT the
+    # ClinicVisit mh_screening tick. mh_screening_done is routine on ~97% of
+    # visits, which inflated this to ~all screened FSWs (verified 2 Nov 2026:
+    # 2309 screened, 0 MH diagnoses). Sum the reported counts over the period.
+    return PHDCounsellingReport.objects.filter(
         organisation=org,
         approval_status=APPROVED,
-        visit_date__range=(period_start, period_end),
-        mh_screening_done=True,
-    ).values('client_id').distinct().count()
+        report_date__range=(period_start, period_end),
+    ).aggregate(t=Sum('mh_count'))['t'] or 0
 
 
 # ── SL4 — Outreach sessions conducted ────────────────────────────────────────

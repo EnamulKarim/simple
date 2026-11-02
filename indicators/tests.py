@@ -516,6 +516,65 @@ class NewComputeFunctionsTest(TestCase):
         self.assertFalse(row['unlinked'])
         self.assertIsNone(row['month_target'])
 
+    def test_phd_sl2_counts_gbv_referral_not_screening(self):
+        """SL2 = GBV survivors referred (referral_gbv), NOT the routine GBV
+        screening tick that PHD records on nearly every visit."""
+        from programs.models import ServiceCenter, Client, ClinicVisit
+        from indicators.phd import compute_SL2
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-GBV', code='GBV-1',
+            center_type=ServiceCenter.BROTHEL, district='Khulna')
+        c1 = Client.objects.create(organisation='PHD', center=centre,
+                                   client_id='2-0001', name='A',
+                                   approval_status=Client.APPROVED)
+        c2 = Client.objects.create(organisation='PHD', center=centre,
+                                   client_id='2-0002', name='B',
+                                   approval_status=Client.APPROVED)
+        # Both screened; only c2 was actually referred for GBV.
+        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
+                                   visit_date=date(2026, 6, 2),
+                                   gbv_screening_done=True, referral_gbv=False,
+                                   approval_status=ClinicVisit.APPROVED)
+        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c2,
+                                   visit_date=date(2026, 6, 3),
+                                   gbv_screening_done=True, referral_gbv=True,
+                                   approval_status=ClinicVisit.APPROVED)
+        self.assertEqual(
+            compute_SL2('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
+
+    def test_phd_sl3_sums_counselling_report_mh_not_screening(self):
+        """SL3 = MH counselling delivered (PHDCounsellingReport.mh_count summed),
+        NOT the routine mh_screening tick on ClinicVisit; pending reports excluded."""
+        from programs.models import (ServiceCenter, Client, ClinicVisit,
+                                      PHDCounsellingReport)
+        from indicators.phd import compute_SL3
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-MH', code='MH-1',
+            center_type=ServiceCenter.BROTHEL, district='Tangail')
+        c1 = Client.objects.create(organisation='PHD', center=centre,
+                                   client_id='3-0001', name='A',
+                                   approval_status=Client.APPROVED)
+        # A screened clinic visit must NOT count toward SL3 any more.
+        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
+                                   visit_date=date(2026, 6, 2),
+                                   mh_screening_done=True,
+                                   approval_status=ClinicVisit.APPROVED)
+        # Two approved monthly counselling reports with MH counselling counts.
+        PHDCounsellingReport.objects.create(
+            organisation='PHD', center=centre, report_date=date(2026, 6, 30),
+            mh_count=4, approval_status=PHDCounsellingReport.APPROVED)
+        PHDCounsellingReport.objects.create(
+            organisation='PHD', center=centre, report_date=date(2026, 7, 31),
+            mh_count=3, approval_status=PHDCounsellingReport.APPROVED)
+        # A pending report must NOT count.
+        PHDCounsellingReport.objects.create(
+            organisation='PHD', center=centre, report_date=date(2026, 8, 31),
+            mh_count=99, approval_status=PHDCounsellingReport.PENDING)
+        self.assertEqual(
+            compute_SL3('PHD', date(2026, 5, 21), date(2026, 11, 20)), 7)
+
     def test_phd_sl15a_counts_message_boards(self):
         from programs.models import IECMaterial
         from partners.models import Partner
