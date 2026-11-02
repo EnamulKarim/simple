@@ -155,23 +155,69 @@ def compute_SL5e(org, period_start, period_end):   # HIV kits
 
 
 # ── SL6 — HIV/STI positive cases referred and enrolled in treatment ──────────
+# STI diagnoses recorded on a clinic visit. (The clinic form's HIV-diagnosis
+# field is not stored on ClinicVisit — HIV positivity comes from the HTC
+# register instead — so it is intentionally absent here. GH = general health is
+# not an STI and is excluded.)
+_STI_DIAG_FIELDS = (
+    'diag_uds', 'diag_vds', 'diag_gu', 'diag_pid',
+    'diag_ss', 'diag_ib', 'diag_anal_sti',
+)
+# Clinic referrals that route a positive case onward for STI/HIV treatment
+# (STI-confirmatory, STI-partner, STI-non-responsive/HIV). GBV/MHPSS/MCH/TB/EPI
+# referrals are a different pathway and are not treatment enrolment for a
+# positive case.
+_TREATMENT_REF_FIELDS = (
+    'referral_sti_kp', 'referral_sti_partner', 'referral_hiv_testing',
+)
+
+
 def compute_SL6(org, period_start, period_end):
-    # Anchor the period on the REFERRAL (the action this indicator counts), not
-    # the test. Scoping BOTH the positive test AND the referral to the window
-    # dropped anyone who tested positive in one month but was referred the next.
-    # positive_clients is therefore all-time positives; we count those referred
-    # within the period.
-    positive_clients = HIVSTITestResult.objects.filter(
-        organisation=org,
-        approval_status=APPROVED,
+    # "HIV/STI positive cases successfully referred and enrolled in treatment."
+    # A client counts when, within the period, they are BOTH positive AND
+    # referred for treatment:
+    #   positive = HIV positive on the HTC register (hiv_result='positive')
+    #              OR an STI diagnosed on a clinic visit (any _STI_DIAG_FIELDS)
+    #   referred = a clinic STI/HIV treatment-referral flag (_TREATMENT_REF_FIELDS)
+    #              OR a row in the Referral register
+    # The forms capture no separate "enrolled" confirmation, so the recorded
+    # referral is the measurable step. The old version required an HIV positive
+    # AND a separate Referral-register row for the same client, which missed
+    # STI-diagnosed positives and cases whose referral was logged as a clinic
+    # flag rather than a register row — so it read 0 even with 2 HIV positives.
+    hiv_pos = HIVSTITestResult.objects.filter(
+        organisation=org, approval_status=APPROVED,
+        testing_date__range=(period_start, period_end),
         hiv_result='positive',
     ).values_list('client_id', flat=True)
-    return Referral.objects.filter(
-        organisation=org,
-        approval_status=APPROVED,
+
+    sti_q = Q()
+    for f in _STI_DIAG_FIELDS:
+        sti_q |= Q(**{f: True})
+    sti_pos = ClinicVisit.objects.filter(
+        organisation=org, approval_status=APPROVED,
+        visit_date__range=(period_start, period_end),
+    ).filter(sti_q).values_list('client_id', flat=True)
+
+    positive_ids = set(hiv_pos) | set(sti_pos)
+    if not positive_ids:
+        return 0
+
+    ref_q = Q()
+    for f in _TREATMENT_REF_FIELDS:
+        ref_q |= Q(**{f: True})
+    clinic_refs = ClinicVisit.objects.filter(
+        organisation=org, approval_status=APPROVED,
+        visit_date__range=(period_start, period_end),
+        client_id__in=positive_ids,
+    ).filter(ref_q).values_list('client_id', flat=True)
+    register_refs = Referral.objects.filter(
+        organisation=org, approval_status=APPROVED,
         referral_date__range=(period_start, period_end),
-        client_id__in=positive_clients,
-    ).values('client_id').distinct().count()
+        client_id__in=positive_ids,
+    ).values_list('client_id', flat=True)
+
+    return len(set(clinic_refs) | set(register_refs))
 
 
 # ── SL7 — GBV survivors referred for MHPSS ───────────────────────────────────

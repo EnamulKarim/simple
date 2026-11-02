@@ -667,6 +667,64 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(compute_SL5a('PHD', *P), 500)
         self.assertEqual(compute_SL5e('PHD', *P), 70)
 
+    def test_phd_sl6_counts_positive_cases_referred_for_treatment(self):
+        """SL6 = HIV-positive (HTC) OR STI-diagnosed (clinic) FSWs who were
+        referred for treatment (a clinic STI/HIV referral flag or a Referral
+        register row). A positive with no referral, and a referral with no
+        positive, both do not count."""
+        from programs.models import (ServiceCenter, Client, ClinicVisit,
+                                      HIVSTITestResult, Referral)
+        from indicators.phd import compute_SL6
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-SL6', code='SL6-1',
+            center_type=ServiceCenter.BROTHEL, district='Tangail')
+
+        def mk_client(cid):
+            return Client.objects.create(
+                organisation='PHD', center=centre, client_id=cid, name=cid,
+                approval_status=Client.APPROVED)
+
+        P = (date(2026, 5, 21), date(2026, 11, 20))
+
+        # A: HIV positive + clinic STI/HIV treatment referral -> counts.
+        a = mk_client('6-A')
+        HIVSTITestResult.objects.create(
+            organisation='PHD', center=centre, client=a,
+            testing_date=date(2026, 6, 1), hiv_result='positive',
+            approval_status=HIVSTITestResult.APPROVED)
+        ClinicVisit.objects.create(
+            organisation='PHD', center=centre, client=a,
+            visit_date=date(2026, 6, 2), referral_sti_kp=True,
+            approval_status=ClinicVisit.APPROVED)
+
+        # B: STI diagnosed in clinic + a Referral-register row -> counts.
+        b = mk_client('6-B')
+        ClinicVisit.objects.create(
+            organisation='PHD', center=centre, client=b,
+            visit_date=date(2026, 6, 3), diag_ss=True,
+            approval_status=ClinicVisit.APPROVED)
+        Referral.objects.create(
+            organisation='PHD', center=centre, client=b,
+            referral_date=date(2026, 6, 4), referral_type=Referral.OTHER,
+            approval_status=Referral.APPROVED)
+
+        # C: HIV positive but NO referral -> excluded.
+        c = mk_client('6-C')
+        HIVSTITestResult.objects.create(
+            organisation='PHD', center=centre, client=c,
+            testing_date=date(2026, 6, 5), hiv_result='positive',
+            approval_status=HIVSTITestResult.APPROVED)
+
+        # D: referred but NOT positive -> excluded.
+        d = mk_client('6-D')
+        ClinicVisit.objects.create(
+            organisation='PHD', center=centre, client=d,
+            visit_date=date(2026, 6, 6), referral_sti_kp=True,
+            approval_status=ClinicVisit.APPROVED)
+
+        self.assertEqual(compute_SL6('PHD', *P), 2)
+
     def test_phd_sl15a_counts_message_boards(self):
         from programs.models import IECMaterial
         from partners.models import Partner
