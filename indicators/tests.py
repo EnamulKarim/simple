@@ -74,20 +74,24 @@ class IndicatorTargetReadTest(TestCase):
             return r.data['results']
         return r.data
 
-    def test_supervisor_sees_all_48(self):
+    def test_supervisor_sees_all_44(self):
+        # 48 rows exist, but SL5b-e (the PHD stock "Screening Kits" cards) are
+        # deactivated (is_active=False) — removed from the grid per user
+        # request (2026-11-11) — so the active-only Targets endpoint reads 44.
         self.client.force_authenticate(user=self.sup)
         r = self.client.get(TARGETS_URL)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(self._rows(r)), 48)
+        self.assertEqual(len(self._rows(r)), 44)
 
     def test_ciprb_org_lead_reads_all_partners(self):
         # ORG_LEAD cross-org read is now bound to CIPRB (the monitoring org),
-        # mirroring can_access_mpdsr/fistula. A CIPRB lead still reads all 44.
+        # mirroring can_access_mpdsr/fistula. A CIPRB lead still reads all 44
+        # active rows (SL5b-e deactivated — see test_supervisor_sees_all_44).
         ciprb_lead = _user('lead@ciprb', Organisation.CIPRB, Role.ORG_LEAD)
         self.client.force_authenticate(user=ciprb_lead)
         r = self.client.get(TARGETS_URL)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(self._rows(r)), 48)
+        self.assertEqual(len(self._rows(r)), 44)
 
     def test_non_ciprb_org_lead_sees_only_own_partner(self):
         # A PHD/Bandhu org lead is org-bound (can_read_other_orgs=False) — no
@@ -203,9 +207,11 @@ class PartnerProgressShapeTest(TestCase):
     """get_partner_indicator_progress emits the Step 3 dict shape with
     achievement=0 / percentage rules / unlinked flag."""
 
-    def test_phd_returns_27_rows(self):
+    def test_phd_returns_23_rows(self):
+        # 27 active-eligible rows minus SL5b-e (deactivated — removed from
+        # the grid per user request, 2026-11-11) = 23.
         rows = get_partner_indicator_progress('PHD', P_START, P_END)
-        self.assertEqual(len(rows), 27)
+        self.assertEqual(len(rows), 23)
 
     def test_bandhu_returns_18_rows(self):
         rows = get_partner_indicator_progress('Bandhu', P_START, P_END)
@@ -337,7 +343,7 @@ class ProgressEndpointTest(TestCase):
             '&period_start=2026-05-21&period_end=2026-11-20'
         )
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.data), 27)
+        self.assertEqual(len(r.data), 23)  # SL5b-e deactivated, see above
         first = r.data[0]
         for key in ('activity_code', 'objective_number', 'achievement',
                     'percentage', 'unlinked', 'target_value'):
@@ -352,7 +358,7 @@ class ProgressEndpointTest(TestCase):
         # Supervisor with no ?org param ⇒ all three partners merged.
         orgs = {row['organisation'] for row in r.data}
         self.assertEqual(orgs, {'CIPRB', 'Bandhu', 'PHD'})
-        self.assertEqual(len(r.data), 48)
+        self.assertEqual(len(r.data), 44)  # SL5b-e deactivated, see above
 
 
 # ─── KoboFormMapping wiring (migration 0006) ─────────────────────────────────
