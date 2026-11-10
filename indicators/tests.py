@@ -516,10 +516,13 @@ class NewComputeFunctionsTest(TestCase):
         self.assertFalse(row['unlinked'])
         self.assertIsNone(row['month_target'])
 
-    def test_phd_sl2_counts_gbv_referral_not_screening(self):
-        """SL2 = GBV survivors referred (referral_gbv), NOT the routine GBV
-        screening tick that PHD records on nearly every visit."""
-        from programs.models import ServiceCenter, Client, ClinicVisit
+    def test_phd_sl2_counts_gbv_from_referral_register(self):
+        """SL2 = GBV survivors referred, read from the Referral REGISTER
+        (referral_reason ~ 'GBV'), per the client Indicators->Kobo map. The
+        Patient Record referral_gbv tick alone does NOT count, because field staff
+        record GBV referrals in the Referral section."""
+        from programs.models import (ServiceCenter, Client, ClinicVisit,
+                                      Referral)
         from indicators.phd import compute_SL2
         from datetime import date
         centre = ServiceCenter.objects.create(
@@ -531,15 +534,21 @@ class NewComputeFunctionsTest(TestCase):
         c2 = Client.objects.create(organisation='PHD', center=centre,
                                    client_id='2-0002', name='B',
                                    approval_status=Client.APPROVED)
-        # Both screened; only c2 was actually referred for GBV.
+        # A clinic GBV tick alone must NOT count any more (source is the register).
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
                                    visit_date=date(2026, 6, 2),
-                                   gbv_screening_done=True, referral_gbv=False,
-                                   approval_status=ClinicVisit.APPROVED)
-        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c2,
-                                   visit_date=date(2026, 6, 3),
                                    gbv_screening_done=True, referral_gbv=True,
                                    approval_status=ClinicVisit.APPROVED)
+        # A Referral-register row whose reason names GBV counts (c2).
+        Referral.objects.create(
+            organisation='PHD', center=centre, client=c2,
+            referral_date=date(2026, 6, 3), referral_type=Referral.OTHER,
+            referral_reason='GBV', approval_status=Referral.APPROVED)
+        # A non-GBV referral must NOT count.
+        Referral.objects.create(
+            organisation='PHD', center=centre, client=c1,
+            referral_date=date(2026, 6, 4), referral_type=Referral.OTHER,
+            referral_reason='STI', approval_status=Referral.APPROVED)
         self.assertEqual(
             compute_SL2('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
 
@@ -626,46 +635,45 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(
             compute_SL14('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
 
-    def test_phd_sl5_maps_free_text_commodity_names(self):
-        """SL5c/SL5d must match the real free-text item names (HBsAg / HCV),
-        not the literal strings 'hepatitis b' / 'hepatitis c' which never appear.
-        Penicillin injections are syphilis treatment and must NOT count as a
-        syphilis test kit (SL5b). Pending rows excluded."""
-        from programs.models import ServiceCenter, StockEntry
-        from indicators.phd import (compute_SL5a, compute_SL5b, compute_SL5c,
+    def test_phd_sl5_screenings_from_patient_record(self):
+        """SL5b-e count the SCREENINGS performed on the Patient Record (clinic
+        visit booleans), per the client Indicators->Kobo map, NOT the Stock form.
+        Syphilis maps to sti_screening_done. One screening = one kit; pending
+        visits excluded. (SL5a / condoms is unchanged and still read from stock.)"""
+        from programs.models import ServiceCenter, Client, ClinicVisit
+        from indicators.phd import (compute_SL5b, compute_SL5c,
                                      compute_SL5d, compute_SL5e)
         from datetime import date
         centre = ServiceCenter.objects.create(
-            organisation='PHD', name='C-Stock', code='STK-1',
+            organisation='PHD', name='C-Scr', code='SCR-1',
             center_type=ServiceCenter.BROTHEL, district='Tangail')
 
-        def stock(name, issued, status=StockEntry.APPROVED, month=date(2026, 6, 1)):
-            StockEntry.objects.create(
-                organisation='PHD', center=centre, reporting_month=month,
-                item_name=name, quantity_issued=issued, approval_status=status)
+        def client(cid):
+            return Client.objects.create(
+                organisation='PHD', center=centre, client_id=cid, name=cid,
+                approval_status=Client.APPROVED)
 
-        # Hep B — all three are the HBsAg surface-antigen test under different names.
-        stock('HBsAg kits', 50)
-        stock('HbsAG', 9, month=date(2026, 7, 1))
-        stock('Hepatitis B kits', 1, month=date(2026, 8, 1))   # also hep B
-        # Hep C — HCV antibody test, varied spelling.
-        stock('HCV kits', 40)
-        stock('Hepatitis C', 2, month=date(2026, 7, 1))        # also hep C
-        # Syphilis test kit — counts; penicillin treatment — must NOT.
-        stock('Syphilis kits', 30)
-        stock('Inj. Benjapen-12Lac', 100)                      # treatment, excluded
-        # Condoms and HIV.
-        stock('Condom ( Free)', 500)
-        stock('Determine HIV1/2', 70)
-        # A pending HBsAg row must be excluded.
-        stock('HBsAg kits', 999, status=StockEntry.PENDING, month=date(2026, 9, 1))
+        def visit(c, d, status=ClinicVisit.APPROVED, **screens):
+            ClinicVisit.objects.create(
+                organisation='PHD', center=centre, client=c, visit_date=d,
+                approval_status=status, **screens)
+
+        c1, c2, c3 = client('5-1'), client('5-2'), client('5-3')
+        # c1: syphilis + hep B + HIV ; c2: hep B + hep C + HIV ; c3: HIV only
+        visit(c1, date(2026, 6, 2), sti_screening_done=True,
+              hep_b_screening_done=True, hiv_screening_done=True)
+        visit(c2, date(2026, 6, 3), hep_b_screening_done=True,
+              hep_c_screening_done=True, hiv_screening_done=True)
+        visit(c3, date(2026, 6, 4), hiv_screening_done=True)
+        # A pending HIV screening must NOT count.
+        visit(c1, date(2026, 7, 1), status=ClinicVisit.PENDING,
+              hiv_screening_done=True)
 
         P = (date(2026, 5, 21), date(2026, 11, 20))
-        self.assertEqual(compute_SL5c('PHD', *P), 60)   # 50 + 9 + 1, pending excluded
-        self.assertEqual(compute_SL5d('PHD', *P), 42)   # 40 + 2
-        self.assertEqual(compute_SL5b('PHD', *P), 30)   # syphilis kit only, NOT penicillin
-        self.assertEqual(compute_SL5a('PHD', *P), 500)
-        self.assertEqual(compute_SL5e('PHD', *P), 70)
+        self.assertEqual(compute_SL5b('PHD', *P), 1)   # syphilis screenings: c1
+        self.assertEqual(compute_SL5c('PHD', *P), 2)   # hep B screenings: c1, c2
+        self.assertEqual(compute_SL5d('PHD', *P), 1)   # hep C screenings: c2
+        self.assertEqual(compute_SL5e('PHD', *P), 3)   # HIV screenings: c1,c2,c3 (pending excluded)
 
     def test_phd_sl6_counts_positive_cases_referred_for_treatment(self):
         """SL6 = HIV-positive (HTC) OR STI-diagnosed (clinic) FSWs who were

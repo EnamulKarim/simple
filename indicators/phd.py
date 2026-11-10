@@ -60,17 +60,19 @@ def compute_SL1(org, period_start, period_end):
 
 # ── SL2 — GBV survivors identified and referred for services ─────────────────
 def compute_SL2(org, period_start, period_end):
-    # "Identified AND referred" = the GBV REFERRAL action (referral_gbv), NOT the
-    # routine GBV screening tick. gbv_screening_done is recorded on ~97% of PHD
-    # visits, so the old `screening OR referral` term counted nearly every
-    # screened FSW as a GBV survivor (verified 2 Nov 2026: 2309/2370 screened vs
-    # 1 actually referred). The referral is the service this indicator measures,
-    # consistent with SL7's use of referral_mental_health.
-    return ClinicVisit.objects.filter(
+    # Sourced from the REFERRAL register (the form's "referred for" field), per the
+    # client Indicators->Kobo map. NOT the Patient Record GBV tick: field staff log
+    # GBV referrals in the Referral section, so in production (2026-11) the clinic
+    # referral_gbv tick carried only 1 case while the Referral register carried 5
+    # (referral_reason ~ "GBV"). Count distinct survivors referred for GBV.
+    return Referral.objects.filter(
         organisation=org,
         approval_status=APPROVED,
-        visit_date__range=(period_start, period_end),
-        referral_gbv=True,
+        referral_date__range=(period_start, period_end),
+    ).filter(
+        Q(referral_reason__icontains='gbv')
+        | Q(referral_reason__icontains='gender based')
+        | Q(referral_reason__icontains='gender-based')
     ).values('client_id').distinct().count()
 
 
@@ -138,20 +140,46 @@ def compute_SL5a(org, period_start, period_end):   # condoms
     return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5a'])
 
 
-def compute_SL5b(org, period_start, period_end):   # syphilis
-    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5b'])
+# SL5b-e are the SCREENINGS performed, read from the Patient Record (clinic visit)
+# per the client Indicators->Kobo map, NOT the Stock form's kits-issued count. The
+# screening questions clinic_syphilis_screen / clinic_hepb_screen /
+# clinic_hepc_screen / clinic_hiv_screen land on these ClinicVisit booleans
+# (syphilis has no dedicated field; clinic_syphilis_screen maps to
+# sti_screening_done). One screening = one kit used, so count approved Patient
+# Record visits in the period where that screen is Yes. In production (2026-11) the
+# Stock form held far less than the Patient Record (e.g. HIV 353 stock vs 2111
+# screenings), because the stock path is separate and intermittently populated.
+SL5_SCREEN_FIELD = {
+    'SL5b': 'sti_screening_done',     # syphilis (clinic_syphilis_screen)
+    'SL5c': 'hep_b_screening_done',
+    'SL5d': 'hep_c_screening_done',
+    'SL5e': 'hiv_screening_done',
+}
 
 
-def compute_SL5c(org, period_start, period_end):   # hep B
-    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5c'])
+def _screenings_done(org, period_start, period_end, field):
+    return ClinicVisit.objects.filter(
+        organisation=org,
+        approval_status=APPROVED,
+        visit_date__range=(period_start, period_end),
+        **{field: True},
+    ).count()
 
 
-def compute_SL5d(org, period_start, period_end):   # hep C
-    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5d'])
+def compute_SL5b(org, period_start, period_end):   # syphilis screenings
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5b'])
 
 
-def compute_SL5e(org, period_start, period_end):   # HIV kits
-    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5e'])
+def compute_SL5c(org, period_start, period_end):   # hep B screenings
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5c'])
+
+
+def compute_SL5d(org, period_start, period_end):   # hep C screenings
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5d'])
+
+
+def compute_SL5e(org, period_start, period_end):   # HIV screenings
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5e'])
 
 
 # ── SL6 — HIV/STI positive cases referred and enrolled in treatment ──────────
@@ -222,11 +250,20 @@ def compute_SL6(org, period_start, period_end):
 
 # ── SL7 — GBV survivors referred for MHPSS ───────────────────────────────────
 def compute_SL7(org, period_start, period_end):
-    return ClinicVisit.objects.filter(
+    # Sourced from the REFERRAL register ("referred for" = MHPSS / mental health),
+    # per the client Indicators->Kobo map. NOT the Patient Record MHPSS tick: in
+    # production (2026-11) the clinic tick carried 15 while the Referral register
+    # carried 25 (referral_reason ~ "MHPSS"/"Mental health"). Count distinct
+    # survivors referred for MHPSS. 'mhoss' covers a common field typo of MHPSS.
+    return Referral.objects.filter(
         organisation=org,
         approval_status=APPROVED,
-        visit_date__range=(period_start, period_end),
-        referral_mental_health=True,
+        referral_date__range=(period_start, period_end),
+    ).filter(
+        Q(referral_reason__icontains='mhpss')
+        | Q(referral_reason__icontains='mhoss')
+        | Q(referral_reason__icontains='mental')
+        | Q(referral_reason__icontains='psychosocial')
     ).values('client_id').distinct().count()
 
 
