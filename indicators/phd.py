@@ -13,7 +13,7 @@ All counts are over APPROVED submissions only. Data comes from the
 from django.db.models import Q, Sum
 
 from programs.models import (
-    Client, ClinicVisit, HIVSTITestResult, Referral,
+    Client, ClinicVisit, Referral,
     GroupEducationSession,
     ServiceCenter, TrainingEvent, StockEntry, IECMaterial,
     GBVCornerRecord, PHDCounsellingReport,
@@ -203,69 +203,37 @@ def compute_SL5i(org, period_start, period_end):   # HIV screenings performed
 
 
 # ── SL6 — HIV/STI positive cases referred and enrolled in treatment ──────────
-# STI diagnoses recorded on a clinic visit. (The clinic form's HIV-diagnosis
-# field is not stored on ClinicVisit — HIV positivity comes from the HTC
-# register instead — so it is intentionally absent here. GH = general health is
-# not an STI and is excluded.)
-_STI_DIAG_FIELDS = (
-    'diag_uds', 'diag_vds', 'diag_gu', 'diag_pid',
-    'diag_ss', 'diag_ib', 'diag_anal_sti',
-)
-# Clinic referrals that route a positive case onward for STI/HIV treatment
-# (STI-confirmatory, STI-partner, STI-non-responsive/HIV). GBV/MHPSS/MCH/TB/EPI
-# referrals are a different pathway and are not treatment enrolment for a
-# positive case.
-_TREATMENT_REF_FIELDS = (
-    'referral_sti_kp', 'referral_sti_partner', 'referral_hiv_testing',
+# Fragments that mark a Referral-register row as a POSITIVE HIV/STI case being
+# sent on for treatment. Taken from the ACTUAL referral_reason values staff type
+# in production (read 2026-11-10), not guessed:
+#   'Syphilis positive' / 'Syphilis Positive'      -> 'positive'
+#   'TPHA(+ve)' 'TPHA (+)' 'TPHA(+)ve' 'TPHA +ve'
+#   'TPHA (+ve)' 'TPHA(+ ve)' 'TPHA+ ve'           -> 'tpha'
+#   'HBsAg +ve' / 'HbsAg + tive'                   -> 'hbsag'
+#   'Hepatitis B positive'                         -> 'positive'
+#   'STI treatment'                                -> 'sti treatment'
+# TPHA is the syphilis confirmatory test and is only recorded for positives, so
+# the bare 'tpha' fragment is safe. Plain 'STI' / 'VIA' / 'General health'
+# referrals are NOT positives and are deliberately excluded.
+_SL6_POSITIVE_FRAGMENTS = (
+    'tpha', 'positive', '+ve', '+ ve', '(+)', 'hbsag', 'sti treatment',
 )
 
 
 def compute_SL6(org, period_start, period_end):
     # "HIV/STI positive cases successfully referred and enrolled in treatment."
-    # A client counts when, within the period, they are BOTH positive AND
-    # referred for treatment:
-    #   positive = HIV positive on the HTC register (hiv_result='positive')
-    #              OR an STI diagnosed on a clinic visit (any _STI_DIAG_FIELDS)
-    #   referred = a clinic STI/HIV treatment-referral flag (_TREATMENT_REF_FIELDS)
-    #              OR a row in the Referral register
-    # The forms capture no separate "enrolled" confirmation, so the recorded
-    # referral is the measurable step. The old version required an HIV positive
-    # AND a separate Referral-register row for the same client, which missed
-    # STI-diagnosed positives and cases whose referral was logged as a clinic
-    # flag rather than a register row — so it read 0 even with 2 HIV positives.
-    hiv_pos = HIVSTITestResult.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        testing_date__range=(period_start, period_end),
-        hiv_result='positive',
-    ).values_list('client_id', flat=True)
-
-    sti_q = Q()
-    for f in _STI_DIAG_FIELDS:
-        sti_q |= Q(**{f: True})
-    sti_pos = ClinicVisit.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        visit_date__range=(period_start, period_end),
-    ).filter(sti_q).values_list('client_id', flat=True)
-
-    positive_ids = set(hiv_pos) | set(sti_pos)
-    if not positive_ids:
-        return 0
-
-    ref_q = Q()
-    for f in _TREATMENT_REF_FIELDS:
-        ref_q |= Q(**{f: True})
-    clinic_refs = ClinicVisit.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        visit_date__range=(period_start, period_end),
-        client_id__in=positive_ids,
-    ).filter(ref_q).values_list('client_id', flat=True)
-    register_refs = Referral.objects.filter(
-        organisation=org, approval_status=APPROVED,
+    # Sourced from the REFERRAL REGISTER ONLY, per the client Indicators->Kobo
+    # map (SL6 -> Referral). The forms capture no separate "enrolled"
+    # confirmation, so the recorded referral of a positive case is the
+    # measurable step. Count distinct clients.
+    reason_q = Q()
+    for frag in _SL6_POSITIVE_FRAGMENTS:
+        reason_q |= Q(referral_reason__icontains=frag)
+    return Referral.objects.filter(
+        organisation=org,
+        approval_status=APPROVED,
         referral_date__range=(period_start, period_end),
-        client_id__in=positive_ids,
-    ).values_list('client_id', flat=True)
-
-    return len(set(clinic_refs) | set(register_refs))
+    ).filter(reason_q).values('client_id').distinct().count()
 
 
 # ── SL7 — GBV survivors referred for MHPSS ───────────────────────────────────

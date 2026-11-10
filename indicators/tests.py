@@ -675,11 +675,13 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(compute_SL5h('PHD', *P), 1)   # hep C screenings: c2
         self.assertEqual(compute_SL5i('PHD', *P), 3)   # HIV screenings: c1,c2,c3 (pending excluded)
 
-    def test_phd_sl6_counts_positive_cases_referred_for_treatment(self):
-        """SL6 = HIV-positive (HTC) OR STI-diagnosed (clinic) FSWs who were
-        referred for treatment (a clinic STI/HIV referral flag or a Referral
-        register row). A positive with no referral, and a referral with no
-        positive, both do not count."""
+    def test_phd_sl6_counts_positive_cases_from_referral_register(self):
+        """SL6 = HIV/STI POSITIVE cases referred on for treatment, read from the
+        Referral register alone (client Indicators->Kobo map: SL6 -> Referral).
+        Matching is driven by the real referral_reason spellings staff use
+        ('TPHA(+ve)', 'Syphilis positive', 'HBsAg +ve', ...). Plain STI / VIA /
+        General health referrals are not positives; a clinic-only positive with
+        no Referral row does not count; pending referrals do not count."""
         from programs.models import (ServiceCenter, Client, ClinicVisit,
                                       HIVSTITestResult, Referral)
         from indicators.phd import compute_SL6
@@ -695,43 +697,47 @@ class NewComputeFunctionsTest(TestCase):
 
         P = (date(2026, 5, 21), date(2026, 11, 20))
 
-        # A: HIV positive + clinic STI/HIV treatment referral -> counts.
-        a = mk_client('6-A')
-        HIVSTITestResult.objects.create(
-            organisation='PHD', center=centre, client=a,
-            testing_date=date(2026, 6, 1), hiv_result='positive',
-            approval_status=HIVSTITestResult.APPROVED)
-        ClinicVisit.objects.create(
-            organisation='PHD', center=centre, client=a,
-            visit_date=date(2026, 6, 2), referral_sti_kp=True,
-            approval_status=ClinicVisit.APPROVED)
+        def referral(client, reason, day, status=Referral.APPROVED):
+            Referral.objects.create(
+                organisation='PHD', center=centre, client=client,
+                referral_date=date(2026, 6, day),
+                referral_type=Referral.OTHER, referral_reason=reason,
+                approval_status=status)
 
-        # B: STI diagnosed in clinic + a Referral-register row -> counts.
-        b = mk_client('6-B')
-        ClinicVisit.objects.create(
-            organisation='PHD', center=centre, client=b,
-            visit_date=date(2026, 6, 3), diag_ss=True,
-            approval_status=ClinicVisit.APPROVED)
-        Referral.objects.create(
-            organisation='PHD', center=centre, client=b,
-            referral_date=date(2026, 6, 4), referral_type=Referral.OTHER,
-            approval_status=Referral.APPROVED)
+        # Every spelling below is a REAL referral_reason value read from
+        # production on 2026-11-10 — these must all count as a positive case.
+        positives = [
+            'Syphilis positive', 'Syphilis Positive', 'TPHA(+ve)', 'TPHA (+)',
+            'TPHA(+)ve', 'TPHA +ve', 'TPHA (+ve)', 'TPHA(+ ve)', 'TPHA+ ve',
+            'HBsAg +ve', 'HbsAg + tive', 'Hepatitis B positive',
+            'STI treatment',
+        ]
+        for i, reason in enumerate(positives):
+            referral(mk_client('6-P%02d' % i), reason, 1 + (i % 25))
 
-        # C: HIV positive but NO referral -> excluded.
-        c = mk_client('6-C')
+        # Real values that are NOT a positive case -> must be excluded.
+        for i, reason in enumerate(['STI', 'VIA test', 'VIA&STI',
+                                    'General health', 'GH', 'Wellness center',
+                                    'MHPSS', 'GBV', 'Skin rash']):
+            referral(mk_client('6-N%02d' % i), reason, 1 + (i % 25))
+
+        # A pending positive referral must NOT count.
+        referral(mk_client('6-PEND'), 'Syphilis positive', 7,
+                 status=Referral.PENDING)
+
+        # A clinic-only positive with no Referral row must NOT count: SL6 is
+        # sourced from the Referral register alone (client Indicators->Kobo map).
+        clinic_only = mk_client('6-CLINIC')
         HIVSTITestResult.objects.create(
-            organisation='PHD', center=centre, client=c,
+            organisation='PHD', center=centre, client=clinic_only,
             testing_date=date(2026, 6, 5), hiv_result='positive',
             approval_status=HIVSTITestResult.APPROVED)
-
-        # D: referred but NOT positive -> excluded.
-        d = mk_client('6-D')
         ClinicVisit.objects.create(
-            organisation='PHD', center=centre, client=d,
-            visit_date=date(2026, 6, 6), referral_sti_kp=True,
+            organisation='PHD', center=centre, client=clinic_only,
+            visit_date=date(2026, 6, 6), diag_ss=True, referral_sti_kp=True,
             approval_status=ClinicVisit.APPROVED)
 
-        self.assertEqual(compute_SL6('PHD', *P), 2)
+        self.assertEqual(compute_SL6('PHD', *P), len(positives))
 
     def test_phd_sl15a_counts_message_boards(self):
         from programs.models import IECMaterial
