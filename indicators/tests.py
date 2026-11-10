@@ -1,7 +1,7 @@
 """
 Tests for the restructured IndicatorTarget API + Target Config permissions.
 
-The 47-row seed (PHD 26 + Bandhu 18 + CIPRB 3) is loaded by the indicators
+The 48-row seed (PHD 27 + Bandhu 18 + CIPRB 3) is loaded by the indicators
 migrations; these tests rely on it. PHD uses the SL1–SL16 SIDA codes; the legacy
 PHD scheme (1.1 / 3.1a–d / 1.7 / the "OVERALL — Brothels covered" row) was
 retired in the PHD rebuild.
@@ -25,14 +25,14 @@ def _user(email, org, role):
 
 
 class SeedShapeTest(TestCase):
-    """The migration-loaded fixture should produce 47 rows with the
+    """The migration-loaded fixture should produce 48 rows with the
     correct partner split and the correct null-target counts."""
 
     def test_total_rows(self):
-        self.assertEqual(IndicatorTarget.objects.count(), 47)
+        self.assertEqual(IndicatorTarget.objects.count(), 48)
 
     def test_partner_counts(self):
-        self.assertEqual(IndicatorTarget.objects.filter(partner__code='PHD').count(), 26)
+        self.assertEqual(IndicatorTarget.objects.filter(partner__code='PHD').count(), 27)
         self.assertEqual(IndicatorTarget.objects.filter(partner__code='Bandhu').count(), 18)
         self.assertEqual(IndicatorTarget.objects.filter(partner__code='CIPRB').count(), 3)
 
@@ -74,11 +74,11 @@ class IndicatorTargetReadTest(TestCase):
             return r.data['results']
         return r.data
 
-    def test_supervisor_sees_all_47(self):
+    def test_supervisor_sees_all_48(self):
         self.client.force_authenticate(user=self.sup)
         r = self.client.get(TARGETS_URL)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(self._rows(r)), 47)
+        self.assertEqual(len(self._rows(r)), 48)
 
     def test_ciprb_org_lead_reads_all_partners(self):
         # ORG_LEAD cross-org read is now bound to CIPRB (the monitoring org),
@@ -87,7 +87,7 @@ class IndicatorTargetReadTest(TestCase):
         self.client.force_authenticate(user=ciprb_lead)
         r = self.client.get(TARGETS_URL)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(self._rows(r)), 47)
+        self.assertEqual(len(self._rows(r)), 48)
 
     def test_non_ciprb_org_lead_sees_only_own_partner(self):
         # A PHD/Bandhu org lead is org-bound (can_read_other_orgs=False) — no
@@ -203,9 +203,9 @@ class PartnerProgressShapeTest(TestCase):
     """get_partner_indicator_progress emits the Step 3 dict shape with
     achievement=0 / percentage rules / unlinked flag."""
 
-    def test_phd_returns_26_rows(self):
+    def test_phd_returns_27_rows(self):
         rows = get_partner_indicator_progress('PHD', P_START, P_END)
-        self.assertEqual(len(rows), 26)
+        self.assertEqual(len(rows), 27)
 
     def test_bandhu_returns_18_rows(self):
         rows = get_partner_indicator_progress('Bandhu', P_START, P_END)
@@ -230,10 +230,16 @@ class PartnerProgressShapeTest(TestCase):
 
     def test_achievement_is_zero_not_none_with_no_records(self):
         # No fixtures, no Kobo submissions → every linked row should
-        # return achievement=0 (never None).
+        # return achievement=0 (never None) — EXCEPT the PHD "done by them"
+        # confirmed-completion rows (SL15a/b/c, SL16), which read their
+        # confirmed floor even with zero Kobo records by design (see
+        # indicators.phd.PHD_CONFIRMED_COMPLETIONS).
+        from indicators.phd import PHD_CONFIRMED_COMPLETIONS
         for org in ('PHD', 'Bandhu'):
             for r in get_partner_indicator_progress(org, P_START, P_END):
                 self.assertIsNotNone(r['achievement'], msg=f'{org}/{r["activity_code"]}')
+                if org == 'PHD' and r['activity_code'] in PHD_CONFIRMED_COMPLETIONS:
+                    continue
                 self.assertEqual(r['achievement'], 0)
 
     def test_percentage_null_when_target_null(self):
@@ -244,10 +250,13 @@ class PartnerProgressShapeTest(TestCase):
 
     def test_percentage_zero_when_target_positive_and_achievement_zero(self):
         # PHD rows have positive targets and achievement=0 (no records);
-        # percentage must be 0.0, not None.
+        # percentage must be 0.0, not None — except the confirmed-completion
+        # rows, which read 100% even with no Kobo records (by design).
+        from indicators.phd import PHD_CONFIRMED_COMPLETIONS
         rows = [
             r for r in get_partner_indicator_progress('PHD', P_START, P_END)
             if r['target_value'] is not None and not r['unlinked']
+            and r['activity_code'] not in PHD_CONFIRMED_COMPLETIONS
         ]
         self.assertTrue(rows, 'expected at least one linked PHD row with a target')
         for r in rows:
@@ -258,14 +267,17 @@ class PartnerProgressShapeTest(TestCase):
 
     def test_iec_rows_now_linked_and_returning_zero(self):
         # PHD's IEC display indicators (SL15a message boards / SL15b signboards /
-        # SL15c billboards) are wired to the IECMaterial compute functions; with
-        # no IECMaterial rows in the test DB they return achievement=0,
-        # unlinked=False.
+        # SL15c billboards) are wired to the IECMaterial compute functions and
+        # are linked (unlinked=False); their achievement reads the confirmed
+        # "done by them" floor (180/9/11) even with no IECMaterial rows in the
+        # test DB, not a bare 0 — see test_phd_confirmed_completion_floor_cumulative_only
+        # for the floor behaviour itself.
+        from indicators.phd import PHD_CONFIRMED_COMPLETIONS
         rows = {r['activity_code']: r for r in get_partner_indicator_progress('PHD', P_START, P_END)}
         for code in ('SL15a', 'SL15b', 'SL15c'):
             self.assertIn(code, rows)
             self.assertFalse(rows[code]['unlinked'])
-            self.assertEqual(rows[code]['achievement'], 0)
+            self.assertEqual(rows[code]['achievement'], PHD_CONFIRMED_COMPLETIONS[code])
 
     def test_ciprb_rows_now_linked_and_returning_zero(self):
         # CIPRB compute functions (indicators.ciprb) wire all 3 rows.
@@ -325,7 +337,7 @@ class ProgressEndpointTest(TestCase):
             '&period_start=2026-05-21&period_end=2026-11-20'
         )
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.data), 26)
+        self.assertEqual(len(r.data), 27)
         first = r.data[0]
         for key in ('activity_code', 'objective_number', 'achievement',
                     'percentage', 'unlinked', 'target_value'):
@@ -340,7 +352,7 @@ class ProgressEndpointTest(TestCase):
         # Supervisor with no ?org param ⇒ all three partners merged.
         orgs = {row['organisation'] for row in r.data}
         self.assertEqual(orgs, {'CIPRB', 'Bandhu', 'PHD'})
-        self.assertEqual(len(r.data), 47)
+        self.assertEqual(len(r.data), 48)
 
 
 # ─── KoboFormMapping wiring (migration 0006) ─────────────────────────────────
@@ -472,10 +484,12 @@ class NewComputeFunctionsTest(TestCase):
         n = compute_I_BND_1_1('Bandhu', date(2026, 5, 21), date(2026, 11, 20))
         self.assertEqual(n, 2)   # the two named registrations only
 
-    def test_phd_sl1r_counts_registry_not_screening(self):
-        """PHD 'FSWs reached' headline (SL1R) = the Mother List registry
-        (distinct approved, non-stub PHD clients), measured like Bandhu 1.1 —
-        NOT the SL1 screening-service count. SL1 stays the narrower indicator."""
+    def test_phd_sl1_matches_sl1r_mother_list_registry(self):
+        """PHD 'FSWs reached' (SL1R headline) and SL1 (the lower SIDA-framework
+        card) are now the SAME measure — the Mother List registry (distinct
+        approved, non-stub PHD clients), per Activity.docx (2026-11-11). They
+        must agree exactly when given the same period. Replaces the old SL1
+        screening-service definition entirely (no screening activity here)."""
         from programs.models import ServiceCenter, Client, ClinicVisit
         from indicators.phd import compute_SL1R, compute_SL1
         from datetime import date
@@ -495,14 +509,14 @@ class NewComputeFunctionsTest(TestCase):
         Client.objects.create(organisation='PHD', center=centre,
                               client_id='1-PEND', name='Pending',
                               approval_status=Client.PENDING)
-        # Only ONE of the three has actually received a screening service.
+        # A screening service with no bearing on either definition any more.
         ClinicVisit.objects.create(organisation='PHD', center=centre,
                                    client=reg[0], visit_date=date(2026, 6, 2),
                                    hiv_screening_done=True,
                                    approval_status=ClinicVisit.APPROVED)
         P = (date(2026, 5, 21), date(2026, 11, 20))
         self.assertEqual(compute_SL1R('PHD', *P), 3)   # registry = 3 named approved
-        self.assertEqual(compute_SL1('PHD', *P), 1)    # screening service = 1
+        self.assertEqual(compute_SL1('PHD', *P), 3)    # SL1 agrees with SL1R exactly
 
     def test_phd_registry_kpi_shape(self):
         """The headline KPI row is SL1R, carries the 3,500 target, and is linked
@@ -516,14 +530,16 @@ class NewComputeFunctionsTest(TestCase):
         self.assertFalse(row['unlinked'])
         self.assertIsNone(row['month_target'])
 
-    def test_phd_sl2_counts_gbv_from_referral_register(self):
-        """SL2 = GBV survivors referred, read from the Referral REGISTER
-        (referral_reason ~ 'GBV'), per the client Indicators->Kobo map. The
-        Patient Record referral_gbv tick alone does NOT count, because field staff
-        record GBV referrals in the Referral section."""
+    def test_phd_sl2_1_counts_gbv_screening_yes_records(self):
+        """SL2.1 ('Number of GBV screenings conducted') counts approved Patient
+        Record visits where GBV SCREENING is Yes (gbv_screening_done), per
+        Activity.docx: 'GBV SCREENING = Yes means screening was performed.'
+        This counts RECORDS, not distinct clients — a client screened on two
+        visits contributes two. A Referral-register row no longer has any
+        bearing on this indicator (that was the old, replaced definition)."""
         from programs.models import (ServiceCenter, Client, ClinicVisit,
                                       Referral)
-        from indicators.phd import compute_SL2
+        from indicators.phd import compute_SL2_1
         from datetime import date
         centre = ServiceCenter.objects.create(
             organisation='PHD', name='C-GBV', code='GBV-1',
@@ -534,27 +550,41 @@ class NewComputeFunctionsTest(TestCase):
         c2 = Client.objects.create(organisation='PHD', center=centre,
                                    client_id='2-0002', name='B',
                                    approval_status=Client.APPROVED)
-        # A clinic GBV tick alone must NOT count any more (source is the register).
+        # Two qualifying GBV-screening visits (c1 twice) — both count (records,
+        # not distinct clients).
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
                                    visit_date=date(2026, 6, 2),
-                                   gbv_screening_done=True, referral_gbv=True,
+                                   gbv_screening_done=True,
                                    approval_status=ClinicVisit.APPROVED)
-        # A Referral-register row whose reason names GBV counts (c2).
+        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
+                                   visit_date=date(2026, 7, 2),
+                                   gbv_screening_done=True,
+                                   approval_status=ClinicVisit.APPROVED)
+        # A visit with GBV screening = No must NOT count.
+        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c2,
+                                   visit_date=date(2026, 6, 5),
+                                   gbv_screening_done=False,
+                                   approval_status=ClinicVisit.APPROVED)
+        # A pending GBV-screening visit must NOT count.
+        ClinicVisit.objects.create(organisation='PHD', center=centre, client=c2,
+                                   visit_date=date(2026, 6, 6),
+                                   gbv_screening_done=True,
+                                   approval_status=ClinicVisit.PENDING)
+        # A Referral-register GBV row no longer drives this indicator at all.
         Referral.objects.create(
             organisation='PHD', center=centre, client=c2,
             referral_date=date(2026, 6, 3), referral_type=Referral.OTHER,
             referral_reason='GBV', approval_status=Referral.APPROVED)
-        # A non-GBV referral must NOT count.
-        Referral.objects.create(
-            organisation='PHD', center=centre, client=c1,
-            referral_date=date(2026, 6, 4), referral_type=Referral.OTHER,
-            referral_reason='STI', approval_status=Referral.APPROVED)
         self.assertEqual(
-            compute_SL2('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
+            compute_SL2_1('PHD', date(2026, 5, 21), date(2026, 11, 20)), 2)
 
-    def test_phd_sl3_sums_counselling_report_mh_not_screening(self):
-        """SL3 = MH counselling delivered (PHDCounsellingReport.mh_count summed),
-        NOT the routine mh_screening tick on ClinicVisit; pending reports excluded."""
+    def test_phd_sl3_sums_group_mh_counselling_count(self):
+        """SL3 ('Number of group mental health counselling sessions') sums
+        PHDCounsellingReport.group_mh_count — the Counselling Report's 'TOTAL
+        MENTAL HEALTH GROUP COUNSELLING (COUNT)' field — per Activity.docx.
+        NOT the individual mh_count field (a different, individual-level
+        activity) and NOT the routine mh_screening tick; pending reports
+        excluded."""
         from programs.models import (ServiceCenter, Client, ClinicVisit,
                                       PHDCounsellingReport)
         from indicators.phd import compute_SL3
@@ -565,24 +595,49 @@ class NewComputeFunctionsTest(TestCase):
         c1 = Client.objects.create(organisation='PHD', center=centre,
                                    client_id='3-0001', name='A',
                                    approval_status=Client.APPROVED)
-        # A screened clinic visit must NOT count toward SL3 any more.
+        # A screened clinic visit must NOT count toward SL3.
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
                                    visit_date=date(2026, 6, 2),
                                    mh_screening_done=True,
                                    approval_status=ClinicVisit.APPROVED)
-        # Two approved monthly counselling reports with MH counselling counts.
+        # Two approved monthly reports with group MH counselling counts.
         PHDCounsellingReport.objects.create(
             organisation='PHD', center=centre, report_date=date(2026, 6, 30),
-            mh_count=4, approval_status=PHDCounsellingReport.APPROVED)
+            group_mh_count=4, mh_count=40,   # individual mh_count must NOT count
+            approval_status=PHDCounsellingReport.APPROVED)
         PHDCounsellingReport.objects.create(
             organisation='PHD', center=centre, report_date=date(2026, 7, 31),
-            mh_count=3, approval_status=PHDCounsellingReport.APPROVED)
+            group_mh_count=3, approval_status=PHDCounsellingReport.APPROVED)
         # A pending report must NOT count.
         PHDCounsellingReport.objects.create(
             organisation='PHD', center=centre, report_date=date(2026, 8, 31),
-            mh_count=99, approval_status=PHDCounsellingReport.PENDING)
+            group_mh_count=99, approval_status=PHDCounsellingReport.PENDING)
         self.assertEqual(
             compute_SL3('PHD', date(2026, 5, 21), date(2026, 11, 20)), 7)
+
+    def test_phd_sl4_sums_participants_sl4a_counts_sessions(self):
+        """SL4 ('FSWs / clients reached through outreach sessions') sums
+        GroupEducationSession.participant_count ('NUMBER OF PARTICIPANTS'),
+        per Activity.docx. SL4a keeps the old session-COUNT definition as its
+        own indicator. A pending session must not count toward either."""
+        from programs.models import ServiceCenter, GroupEducationSession
+        from indicators.phd import compute_SL4, compute_SL4a
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-GEDU', code='GEDU-1',
+            center_type=ServiceCenter.BROTHEL, district='Jashore')
+        GroupEducationSession.objects.create(
+            organisation='PHD', center=centre, session_date=date(2026, 6, 1),
+            participant_count=12, approval_status=GroupEducationSession.APPROVED)
+        GroupEducationSession.objects.create(
+            organisation='PHD', center=centre, session_date=date(2026, 6, 2),
+            participant_count=8, approval_status=GroupEducationSession.APPROVED)
+        GroupEducationSession.objects.create(
+            organisation='PHD', center=centre, session_date=date(2026, 7, 1),
+            participant_count=99, approval_status=GroupEducationSession.PENDING)
+        P = (date(2026, 5, 21), date(2026, 11, 20))
+        self.assertEqual(compute_SL4('PHD', *P), 20)    # 12 + 8 participants
+        self.assertEqual(compute_SL4a('PHD', *P), 2)    # 2 approved sessions
 
     def test_phd_sl9_counts_camp_training_events(self):
         """PHD mobile health camps are stored as TrainingEvent(event_type='camp')
@@ -740,6 +795,10 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(compute_SL6('PHD', *P), len(positives))
 
     def test_phd_sl15a_counts_message_boards(self):
+        """The underlying Kobo aggregation (sum of approved MESSAGE_BOARD
+        quantity, other material types excluded) — checked over a monthly
+        slice so the SL15a "done by them" floor (see next test) does not mask
+        it."""
         from programs.models import IECMaterial
         from partners.models import Partner
         from indicators.phd import compute_SL15a
@@ -757,8 +816,52 @@ class NewComputeFunctionsTest(TestCase):
             quantity=99, date_distributed=date(2026, 6, 1),
             approval_status=IECMaterial.APPROVED,
         )
-        result = compute_SL15a('PHD', date(2026, 5, 21), date(2026, 11, 20))
+        # A June-only window: inside the programme but not the FULL window,
+        # so the confirmed-completion floor does not apply here.
+        result = compute_SL15a('PHD', date(2026, 6, 1), date(2026, 6, 30))
         self.assertEqual(result, 10)  # sum of MESSAGE_BOARD quantity
+
+    def test_phd_confirmed_completion_floor_cumulative_only(self):
+        """SL15a/b/c and SL16 are 'done by them' per Activity.docx (2026-11-11):
+        PHD confirmed these physical installs are complete even though little or
+        nothing has been digitised via Kobo yet. The floor (180/9/11/44) applies
+        ONLY to the full programme window ('Cumulative'), never to a monthly
+        slice, so a specific month is never inflated with the whole total. A
+        real Kobo sum that EXCEEDS the floor is never suppressed back down to
+        it — the floor is a minimum, not a cap."""
+        from programs.models import IECMaterial, GBVCornerRecord
+        from partners.models import Partner
+        from indicators.phd import compute_SL15a, compute_SL15b, compute_SL16
+        from datetime import date
+        partner = Partner.objects.get(code='PHD')
+        FULL = (date(2026, 5, 21), date(2026, 11, 20))
+        JUNE = (date(2026, 6, 1), date(2026, 6, 30))
+
+        # Kobo sum (10) is far below the confirmed floor (180).
+        IECMaterial.objects.create(
+            partner=partner, center=self.phd_center, organisation='PHD',
+            material_type=IECMaterial.MESSAGE_BOARD,
+            quantity=10, date_distributed=date(2026, 6, 1),
+            approval_status=IECMaterial.APPROVED,
+        )
+        self.assertEqual(compute_SL15a('PHD', *FULL), 180)   # floor applies
+        self.assertEqual(compute_SL15a('PHD', *JUNE), 10)    # monthly: real value only
+
+        # No signboards submitted at all — floor still applies cumulatively.
+        self.assertEqual(compute_SL15b('PHD', *FULL), 9)
+        self.assertEqual(compute_SL15b('PHD', *JUNE), 0)
+
+        # A real Kobo count (50) that EXCEEDS the floor (44) is not suppressed.
+        for i in range(50):
+            GBVCornerRecord.objects.create(
+                center=self.phd_center, organisation='PHD',
+                place_of_establishment='Corner %d' % i,
+                date_of_establishment=date(2026, 6, 1),
+                fully_functional=True,
+                approval_status=GBVCornerRecord.APPROVED,
+            )
+        self.assertEqual(compute_SL16('PHD', *FULL), 50)     # real value wins
+        self.assertEqual(compute_SL16('PHD', *JUNE), 50)     # same month, no floor needed anyway
 
     def test_bandhu_2_6_counts_day_observance(self):
         from programs.models import CoordMeeting

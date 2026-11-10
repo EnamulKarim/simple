@@ -314,9 +314,9 @@ export function ExecutiveBento({ progress }: Props) {
         }}
       >
         {/* PHD — SIDA marquee indicators (mirror the PHD dashboard) */}
-        {indCard('PHD', 'SL1', 'PHD · FSWs reached', 'HIV/STI screening & FP', 0.05)}
+        {indCard('PHD', 'SL1', 'PHD · FSWs reached', 'registered on the Mother List', 0.05)}
         {indCard('PHD', 'SL8', 'PHD · Wellness centres', 'providing SRHR services', 0.08)}
-        {indCard('PHD', 'SL4', 'PHD · Outreach sessions', 'SRHR / HIV / GBV awareness', 0.11)}
+        {indCard('PHD', 'SL4', 'PHD · Outreach reach', 'FSWs / clients reached', 0.11)}
         {indCard('PHD', ['SL10', 'SL11', 'SL12', 'SL13'], 'PHD · Providers trained', 'gender-sensitive SRHR training', 0.14)}
         {indCard('PHD', 'SL16', 'PHD · GBV corners', 'established & operational', 0.17)}
         {/* Bandhu — UNFPA marquee indicators (mirror the Bandhu dashboard) */}

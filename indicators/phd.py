@@ -10,6 +10,8 @@ All counts are over APPROVED submissions only. Data comes from the
   phd_activity_ops_v1      → GroupEducationSession, TrainingEvent,
                              IECMaterial, StockEntry, GBVCornerRecord
 """
+import datetime
+
 from django.db.models import Q, Sum
 
 from programs.models import (
@@ -47,51 +49,67 @@ def compute_SL1R(org, period_start, period_end):
     )
 
 
-# ── SL1 — FSWs receiving HIV/STI screening and FP counselling ────────────────
+# ── SL1 — FSWs reached ────────────────────────────────────────────────────────
 def compute_SL1(org, period_start, period_end):
+    # Redefined (2026-11-11, Activity.docx) to be the SAME measure as the
+    # headline "FSWs reached" card (SL1R / the Mother List registry), so the
+    # two always agree when their reporting periods match. Replaces the old
+    # screening/counselling definition (hiv/sti_screening_done on ClinicVisit),
+    # which is no longer surfaced as a separate indicator.
+    return compute_SL1R(org, period_start, period_end)
+
+
+# ── SL2.1 — GBV screenings conducted ─────────────────────────────────────────
+def compute_SL2_1(org, period_start, period_end):
+    # "Number of GBV screenings conducted" — count of Patient Record visits
+    # where GBV SCREENING (clinic_gbv_screen -> gbv_screening_done) is Yes.
+    # Per Activity.docx: "GBV SCREENING = Yes means screening was performed."
+    # A qualifying record counts, not a distinct-client count (mirrors SL5f-i).
+    # Replaces the old "identified and referred" definition, which read the
+    # Referral register instead (a different activity: SL2.2 "cases mitigated"
+    # was the referral/outcome half of that pair — Activity.docx asks for it to
+    # be omitted entirely, so that Referral-register logic is not carried
+    # forward here).
     return ClinicVisit.objects.filter(
         organisation=org,
         approval_status=APPROVED,
         visit_date__range=(period_start, period_end),
-    ).filter(
-        Q(hiv_screening_done=True) | Q(sti_screening_done=True)
-    ).values('client_id').distinct().count()
+        gbv_screening_done=True,
+    ).count()
 
 
-# ── SL2 — GBV survivors identified and referred for services ─────────────────
-def compute_SL2(org, period_start, period_end):
-    # Sourced from the REFERRAL register (the form's "referred for" field), per the
-    # client Indicators->Kobo map. NOT the Patient Record GBV tick: field staff log
-    # GBV referrals in the Referral section, so in production (2026-11) the clinic
-    # referral_gbv tick carried only 1 case while the Referral register carried 5
-    # (referral_reason ~ "GBV"). Count distinct survivors referred for GBV.
-    return Referral.objects.filter(
-        organisation=org,
-        approval_status=APPROVED,
-        referral_date__range=(period_start, period_end),
-    ).filter(
-        Q(referral_reason__icontains='gbv')
-        | Q(referral_reason__icontains='gender based')
-        | Q(referral_reason__icontains='gender-based')
-    ).values('client_id').distinct().count()
-
-
-# ── SL3 — FSWs receiving mental health counselling sessions ──────────────────
+# ── SL3 — Group mental health counselling sessions ───────────────────────────
 def compute_SL3(org, period_start, period_end):
-    # "Receiving MH counselling sessions" comes from the PHD monthly Counselling
-    # Report (PHDCounsellingReport.mh_count — individual MH counselling), NOT the
-    # ClinicVisit mh_screening tick. mh_screening_done is routine on ~97% of
-    # visits, which inflated this to ~all screened FSWs (verified 2 Nov 2026:
-    # 2309 screened, 0 MH diagnoses). Sum the reported counts over the period.
+    # Redefined (2026-11-11, Activity.docx) to sum the Counselling Report's
+    # "TOTAL MENTAL HEALTH GROUP COUNSELLING (COUNT)" field (counsel_group_mh ->
+    # PHDCounsellingReport.group_mh_count), confirmed to hold group/session
+    # counts. Replaces the old mh_count (individual counselling) sum: that was
+    # a different, individual-level activity, not this group-session one.
     return PHDCounsellingReport.objects.filter(
         organisation=org,
         approval_status=APPROVED,
         report_date__range=(period_start, period_end),
-    ).aggregate(t=Sum('mh_count'))['t'] or 0
+    ).aggregate(t=Sum('group_mh_count'))['t'] or 0
 
 
-# ── SL4 — Outreach sessions conducted ────────────────────────────────────────
+# ── SL4 — FSWs / clients reached through outreach ────────────────────────────
 def compute_SL4(org, period_start, period_end):
+    # Redefined (2026-11-11, Activity.docx) to sum "NUMBER OF PARTICIPANTS"
+    # (gedu_participant_count -> GroupEducationSession.participant_count)
+    # across all audience categories, i.e. people REACHED, matching the much
+    # larger target (3,595) the doc specifies for this slot. The session COUNT
+    # itself (the old SL4 definition) is kept as a separate indicator, SL4a.
+    return GroupEducationSession.objects.filter(
+        organisation=org,
+        approval_status=APPROVED,
+        session_date__range=(period_start, period_end),
+    ).aggregate(t=Sum('participant_count'))['t'] or 0
+
+
+# ── SL4a — Outreach sessions conducted (session count) ───────────────────────
+def compute_SL4a(org, period_start, period_end):
+    # The session-count measure SL4 used to carry, kept as its own card once
+    # SL4 itself was repointed to the participant-reach measure above.
     return GroupEducationSession.objects.filter(
         organisation=org,
         approval_status=APPROVED,
@@ -354,35 +372,75 @@ def _iec_qty(org, period_start, period_end, mat_type):
     ).aggregate(t=Sum('quantity'))['t'] or 0
 
 
+# Activity.docx marks SL15a/b/c and SL16 "Done by them" — PHD confirmed
+# (2026-11-11) these physical installs are already complete in the field,
+# independent of what has been digitised via Kobo so far (the Kobo sums were
+# 0 at the time of confirmation). No completion date was supplied, so none is
+# fabricated here; this is a CODE-level floor, not a synthetic database
+# record, so a real Kobo submission arriving later is never double-counted —
+# it simply raises the achievement once it exceeds the confirmed floor.
+# The floor applies ONLY to the full-programme ("Cumulative") window, never to
+# a monthly slice, so a specific month never shows a misleading 180/9/11/44 —
+# see `_is_full_programme_window`.
+PHD_CONFIRMED_COMPLETIONS = {
+    'SL15a': 180,   # message boards installed
+    'SL15b': 9,     # signboards installed
+    'SL15c': 11,    # billboards installed
+    'SL16':  44,    # GBV corners established and fully equipped
+}
+
+PROGRAMME_START = datetime.date(2026, 5, 21)
+PROGRAMME_END = datetime.date(2026, 11, 20)
+
+
+def _is_full_programme_window(period_start, period_end) -> bool:
+    """True when the requested window fully contains the whole programme
+    period — i.e. a genuine cumulative call, not a monthly slice."""
+    return (period_start is not None and period_end is not None
+            and period_start <= PROGRAMME_START and period_end >= PROGRAMME_END)
+
+
+def _with_confirmed_floor(code, org, period_start, period_end, kobo_value):
+    floor = PHD_CONFIRMED_COMPLETIONS.get(code)
+    if floor is not None and _is_full_programme_window(period_start, period_end):
+        return max(kobo_value, floor)
+    return kobo_value
+
+
 def compute_SL15a(org, period_start, period_end):  # message boards
-    return _iec_qty(org, period_start, period_end, IECMaterial.MESSAGE_BOARD)
+    v = _iec_qty(org, period_start, period_end, IECMaterial.MESSAGE_BOARD)
+    return _with_confirmed_floor('SL15a', org, period_start, period_end, v)
 
 
 def compute_SL15b(org, period_start, period_end):  # signboards
-    return _iec_qty(org, period_start, period_end, IECMaterial.SIGNBOARD)
+    v = _iec_qty(org, period_start, period_end, IECMaterial.SIGNBOARD)
+    return _with_confirmed_floor('SL15b', org, period_start, period_end, v)
 
 
 def compute_SL15c(org, period_start, period_end):  # billboards
-    return _iec_qty(org, period_start, period_end, IECMaterial.BILLBOARD)
+    v = _iec_qty(org, period_start, period_end, IECMaterial.BILLBOARD)
+    return _with_confirmed_floor('SL15c', org, period_start, period_end, v)
 
 
 # ── SL16 — GBV corners established and fully equipped ───────────────────────
 def compute_SL16(org, period_start, period_end):
-    return GBVCornerRecord.objects.filter(
+    v = GBVCornerRecord.objects.filter(
         organisation=org,
         approval_status=APPROVED,
         date_of_establishment__range=(period_start, period_end),
         fully_functional=True,
     ).count()
+    return _with_confirmed_floor('SL16', org, period_start, period_end, v)
 
 
 # ─── Activity-code registry ──────────────────────────────────────────────────
 ACTIVITY_REGISTRY = {
     'SL1R':  compute_SL1R,          # headline "FSWs reached" = Mother List registry
-    'SL1':   compute_SL1,
-    'SL2':   compute_SL2,
+    'SL1':   compute_SL1,           # now delegates to compute_SL1R (same measure)
+    'SL2.1': compute_SL2_1,         # GBV screenings conducted
     'SL3':   compute_SL3,
-    'SL4':   compute_SL4,
+    'SL4':   compute_SL4,           # FSWs/clients reached (participant sum)
+    'SL4a':  compute_SL4a,          # outreach sessions conducted (session count)
     'SL5a':  compute_SL5a,
     'SL5b':  compute_SL5b,
     'SL5c':  compute_SL5c,
