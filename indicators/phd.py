@@ -140,20 +140,40 @@ def compute_SL5a(org, period_start, period_end):   # condoms
     return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5a'])
 
 
-# SL5b-e are the SCREENINGS performed, read from the Patient Record (clinic visit)
-# per the client Indicators->Kobo map, NOT the Stock form's kits-issued count. The
-# screening questions clinic_syphilis_screen / clinic_hepb_screen /
-# clinic_hepc_screen / clinic_hiv_screen land on these ClinicVisit booleans
-# (syphilis has no dedicated field; clinic_syphilis_screen maps to
-# sti_screening_done). One screening = one kit used, so count approved Patient
-# Record visits in the period where that screen is Yes. In production (2026-11) the
-# Stock form held far less than the Patient Record (e.g. HIV 353 stock vs 2111
-# screenings), because the stock path is separate and intermittently populated.
+# SL5b-e are the COMMODITY / test-kit stock rows — number of test kits issued,
+# read from the Stock form (StockEntry.quantity_issued), matching the SIDA
+# indicator sheet (label "… Screening Kits", unit "boxes", small boxes target).
+# These are the SUPPLY measure. The count of screenings PERFORMED is a separate
+# metric, served by SL5f-i below (Patient Record), so both views coexist.
+def compute_SL5b(org, period_start, period_end):   # syphilis test kits issued
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5b'])
+
+
+def compute_SL5c(org, period_start, period_end):   # hep B test kits issued
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5c'])
+
+
+def compute_SL5d(org, period_start, period_end):   # hep C test kits issued
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5d'])
+
+
+def compute_SL5e(org, period_start, period_end):   # HIV test kits issued
+    return _kit_issued(org, period_start, period_end, SL5_COMMODITY_FRAGMENTS['SL5e'])
+
+
+# SL5f-i — SCREENINGS PERFORMED, read from the Patient Record (clinic visit),
+# a SEPARATE metric from the SL5b-e commodity/stock rows above. Per the client
+# Indicators->Kobo map the screening questions clinic_syphilis_screen /
+# clinic_hepb_screen / clinic_hepc_screen / clinic_hiv_screen land on these
+# ClinicVisit booleans (syphilis has no dedicated field; clinic_syphilis_screen
+# maps to sti_screening_done). Count approved visits in the period where that
+# screen is Yes. These cards carry their own screening targets (set in Target
+# Config); SL5b-e keep the stock "boxes" targets.
 SL5_SCREEN_FIELD = {
-    'SL5b': 'sti_screening_done',     # syphilis (clinic_syphilis_screen)
-    'SL5c': 'hep_b_screening_done',
-    'SL5d': 'hep_c_screening_done',
-    'SL5e': 'hiv_screening_done',
+    'SL5f': 'sti_screening_done',     # syphilis screening (clinic_syphilis_screen)
+    'SL5g': 'hep_b_screening_done',
+    'SL5h': 'hep_c_screening_done',
+    'SL5i': 'hiv_screening_done',
 }
 
 
@@ -166,20 +186,20 @@ def _screenings_done(org, period_start, period_end, field):
     ).count()
 
 
-def compute_SL5b(org, period_start, period_end):   # syphilis screenings
-    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5b'])
+def compute_SL5f(org, period_start, period_end):   # syphilis screenings performed
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5f'])
 
 
-def compute_SL5c(org, period_start, period_end):   # hep B screenings
-    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5c'])
+def compute_SL5g(org, period_start, period_end):   # hep B screenings performed
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5g'])
 
 
-def compute_SL5d(org, period_start, period_end):   # hep C screenings
-    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5d'])
+def compute_SL5h(org, period_start, period_end):   # hep C screenings performed
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5h'])
 
 
-def compute_SL5e(org, period_start, period_end):   # HIV screenings
-    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5e'])
+def compute_SL5i(org, period_start, period_end):   # HIV screenings performed
+    return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5i'])
 
 
 # ── SL6 — HIV/STI positive cases referred and enrolled in treatment ──────────
@@ -400,6 +420,10 @@ ACTIVITY_REGISTRY = {
     'SL5c':  compute_SL5c,
     'SL5d':  compute_SL5d,
     'SL5e':  compute_SL5e,
+    'SL5f':  compute_SL5f,          # syphilis screenings performed (Patient Record)
+    'SL5g':  compute_SL5g,          # hep B screenings performed
+    'SL5h':  compute_SL5h,          # hep C screenings performed
+    'SL5i':  compute_SL5i,          # HIV screenings performed
     'SL6':   compute_SL6,
     'SL7':   compute_SL7,
     'SL8':   compute_SL8,           # functional brothel centres (activity-gated)

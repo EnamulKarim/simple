@@ -1,7 +1,7 @@
 """
 Tests for the restructured IndicatorTarget API + Target Config permissions.
 
-The 43-row seed (PHD 22 + Bandhu 18 + CIPRB 3) is loaded by the indicators
+The 47-row seed (PHD 26 + Bandhu 18 + CIPRB 3) is loaded by the indicators
 migrations; these tests rely on it. PHD uses the SL1–SL16 SIDA codes; the legacy
 PHD scheme (1.1 / 3.1a–d / 1.7 / the "OVERALL — Brothels covered" row) was
 retired in the PHD rebuild.
@@ -25,14 +25,14 @@ def _user(email, org, role):
 
 
 class SeedShapeTest(TestCase):
-    """The migration-loaded fixture should produce 43 rows with the
+    """The migration-loaded fixture should produce 47 rows with the
     correct partner split and the correct null-target counts."""
 
     def test_total_rows(self):
-        self.assertEqual(IndicatorTarget.objects.count(), 43)
+        self.assertEqual(IndicatorTarget.objects.count(), 47)
 
     def test_partner_counts(self):
-        self.assertEqual(IndicatorTarget.objects.filter(partner__code='PHD').count(), 22)
+        self.assertEqual(IndicatorTarget.objects.filter(partner__code='PHD').count(), 26)
         self.assertEqual(IndicatorTarget.objects.filter(partner__code='Bandhu').count(), 18)
         self.assertEqual(IndicatorTarget.objects.filter(partner__code='CIPRB').count(), 3)
 
@@ -74,11 +74,11 @@ class IndicatorTargetReadTest(TestCase):
             return r.data['results']
         return r.data
 
-    def test_supervisor_sees_all_43(self):
+    def test_supervisor_sees_all_47(self):
         self.client.force_authenticate(user=self.sup)
         r = self.client.get(TARGETS_URL)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(self._rows(r)), 43)
+        self.assertEqual(len(self._rows(r)), 47)
 
     def test_ciprb_org_lead_reads_all_partners(self):
         # ORG_LEAD cross-org read is now bound to CIPRB (the monitoring org),
@@ -87,7 +87,7 @@ class IndicatorTargetReadTest(TestCase):
         self.client.force_authenticate(user=ciprb_lead)
         r = self.client.get(TARGETS_URL)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(self._rows(r)), 43)
+        self.assertEqual(len(self._rows(r)), 47)
 
     def test_non_ciprb_org_lead_sees_only_own_partner(self):
         # A PHD/Bandhu org lead is org-bound (can_read_other_orgs=False) — no
@@ -203,9 +203,9 @@ class PartnerProgressShapeTest(TestCase):
     """get_partner_indicator_progress emits the Step 3 dict shape with
     achievement=0 / percentage rules / unlinked flag."""
 
-    def test_phd_returns_22_rows(self):
+    def test_phd_returns_26_rows(self):
         rows = get_partner_indicator_progress('PHD', P_START, P_END)
-        self.assertEqual(len(rows), 22)
+        self.assertEqual(len(rows), 26)
 
     def test_bandhu_returns_18_rows(self):
         rows = get_partner_indicator_progress('Bandhu', P_START, P_END)
@@ -325,7 +325,7 @@ class ProgressEndpointTest(TestCase):
             '&period_start=2026-05-21&period_end=2026-11-20'
         )
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.data), 22)
+        self.assertEqual(len(r.data), 26)
         first = r.data[0]
         for key in ('activity_code', 'objective_number', 'achievement',
                     'percentage', 'unlinked', 'target_value'):
@@ -340,7 +340,7 @@ class ProgressEndpointTest(TestCase):
         # Supervisor with no ?org param ⇒ all three partners merged.
         orgs = {row['organisation'] for row in r.data}
         self.assertEqual(orgs, {'CIPRB', 'Bandhu', 'PHD'})
-        self.assertEqual(len(r.data), 43)
+        self.assertEqual(len(r.data), 47)
 
 
 # ─── KoboFormMapping wiring (migration 0006) ─────────────────────────────────
@@ -635,14 +635,14 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(
             compute_SL14('PHD', date(2026, 5, 21), date(2026, 11, 20)), 1)
 
-    def test_phd_sl5_screenings_from_patient_record(self):
-        """SL5b-e count the SCREENINGS performed on the Patient Record (clinic
-        visit booleans), per the client Indicators->Kobo map, NOT the Stock form.
-        Syphilis maps to sti_screening_done. One screening = one kit; pending
-        visits excluded. (SL5a / condoms is unchanged and still read from stock.)"""
+    def test_phd_sl5fi_screenings_from_patient_record(self):
+        """SL5f-i count the SCREENINGS performed on the Patient Record (clinic
+        visit booleans) — a SEPARATE metric from the SL5b-e commodity/stock rows.
+        Syphilis maps to sti_screening_done. Pending visits excluded. (SL5b-e are
+        the test-kit stock rows and are read from the Stock form.)"""
         from programs.models import ServiceCenter, Client, ClinicVisit
-        from indicators.phd import (compute_SL5b, compute_SL5c,
-                                     compute_SL5d, compute_SL5e)
+        from indicators.phd import (compute_SL5f, compute_SL5g,
+                                     compute_SL5h, compute_SL5i)
         from datetime import date
         centre = ServiceCenter.objects.create(
             organisation='PHD', name='C-Scr', code='SCR-1',
@@ -670,10 +670,10 @@ class NewComputeFunctionsTest(TestCase):
               hiv_screening_done=True)
 
         P = (date(2026, 5, 21), date(2026, 11, 20))
-        self.assertEqual(compute_SL5b('PHD', *P), 1)   # syphilis screenings: c1
-        self.assertEqual(compute_SL5c('PHD', *P), 2)   # hep B screenings: c1, c2
-        self.assertEqual(compute_SL5d('PHD', *P), 1)   # hep C screenings: c2
-        self.assertEqual(compute_SL5e('PHD', *P), 3)   # HIV screenings: c1,c2,c3 (pending excluded)
+        self.assertEqual(compute_SL5f('PHD', *P), 1)   # syphilis screenings: c1
+        self.assertEqual(compute_SL5g('PHD', *P), 2)   # hep B screenings: c1, c2
+        self.assertEqual(compute_SL5h('PHD', *P), 1)   # hep C screenings: c2
+        self.assertEqual(compute_SL5i('PHD', *P), 3)   # HIV screenings: c1,c2,c3 (pending excluded)
 
     def test_phd_sl6_counts_positive_cases_referred_for_treatment(self):
         """SL6 = HIV-positive (HTC) OR STI-diagnosed (clinic) FSWs who were
