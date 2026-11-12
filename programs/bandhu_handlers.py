@@ -400,7 +400,7 @@ def _bnd_person_log(payload, lat, lng):
         organisation=ORG, center=center,
         service_date=_date(g('submission_info/service_date')) or _sub_date(payload),
         client_id=raw_id, client_id_norm=norm_id,
-        tg_code=_str(g('beneficiary/selected_tg')),
+        tg_code=_str(g('beneficiary/selected_tg'))[:50],
         sti_screening=yn('sti_service/sti_screening_done'),
         htc=yn('hiv_test/hiv_test_done'),
         clinical=yn('other_services/clinical_services'),
