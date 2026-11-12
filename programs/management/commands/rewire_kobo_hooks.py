@@ -38,8 +38,21 @@ Usage
 The default endpoint is the shared fallback (/webhook/programs/), which
 dispatches on the form id_string in the payload and therefore needs no
 per-form slug. Pass --by-form to wire the slug-in-URL endpoint instead.
+
+Canonical mode (--canonical, implied by --on-boot)
+--------------------------------------------------
+After a project transfer/fork some Kobo forms post their asset UID as
+``_xform_id_string`` instead of their XLSForm settings id_string. FORM_HANDLERS
+is keyed by id_string, so the shared endpoint drops those as "unknown form
+id_string". The per-form endpoint /webhook/programs/form/<slug>/ routes by the
+URL slug regardless of the payload id_string, so --canonical wires every
+recognised form to its exact FORM_HANDLERS key (resolved from the Kobo asset
+NAME via NAME_TO_SLUG_RULES). Unrecognised assets are left untouched and
+listed in the summary so the table can be extended. Nothing is ever deleted
+unless --cutover is passed (never in --on-boot).
 """
 import os
+import re
 
 import requests
 from django.conf import settings
@@ -48,6 +61,54 @@ from django.core.management.base import BaseCommand, CommandError
 KOBO_BASE = os.environ.get("KOBO_BASE", "https://kf.kobotoolbox.org").rstrip("/")
 API = f"{KOBO_BASE}/api/v2"
 HOOK_NAME = "SIMPLE Railway"
+
+# Kobo asset name -> canonical FORM_HANDLERS key. Each rule is
+# (all_of, any_of, slug): every term in all_of must appear in the lower-cased
+# name, and (if any_of is non-empty) at least one term in any_of. Terms in
+# any_of / all_of are regular expressions. First match wins, so the most
+# specific rules come first. Names matching nothing are left unmapped.
+NAME_TO_SLUG_RULES = [
+    (("no report",), (), "no_report_v1"),
+    (("mpdsr",), ("action plan", "response plan"), "ciprb_mpdsr_response_plan_v1"),
+    (("mpdsr", "community", "maternal"), (), "ciprb_mpdsr_community_maternal_v1"),
+    (("mpdsr", "community", "neonatal"), (), "ciprb_mpdsr_community_neonatal_v1"),
+    (("mpdsr", "facility", "maternal"), (), "ciprb_mpdsr_facility_maternal_v1"),
+    (("mpdsr", "facility", "neonatal"), (), "ciprb_mpdsr_facility_neonatal_v1"),
+    (("fistula", "question"), (), "ciprb_fistula_questions_v1"),
+    (("fistula", "campaign"), (), "ciprb_fistula_campaign_v1"),
+    (("social", "autopsy"), (), "ciprb_social_autopsy_v1"),
+    (("notification",), (r"\b0?1\b", r"\bone\b"), "ciprb_notification_slip_01_v1"),
+    (("notification",), (r"\b0?2\b", r"\btwo\b"), "ciprb_notification_slip_02_v1"),
+    (("near", "miss"), (), "ciprb_near_miss_v1"),
+    (("safe", "surgery"), (), "ciprb_safe_surgery_v1"),
+    (("mother list",), (), "bandhu_mother_list_v1"),
+    (("beneficiary", "service"), (), "bandhu_service_log_v1"),
+    (("bandhu",), ("training", "other services"), "bandhu_activity_ops_v1"),
+    (("phd", "registration"), (), "phd_registration_v1"),
+    (("phd", "service", "log"), (), "phd_service_log_v1"),
+]
+
+# MPDSR forms are distinguished only by the (community|facility) and
+# (maternal|neonatal) words; if the name has both words of an axis we cannot
+# tell which form it is, so it is treated as unmapped instead of guessed.
+_MPDSR_AXES = (("community", "facility"), ("maternal", "neonatal"))
+
+
+def resolve_canonical_slug(name):
+    """Return the canonical FORM_HANDLERS key for a Kobo asset name, or None."""
+    low = (name or "").lower()
+    if "mpdsr" in low and any(a in low and b in low for a, b in _MPDSR_AXES):
+        return None
+    for all_of, any_of, slug in NAME_TO_SLUG_RULES:
+        if not all(re.search(t, low) for t in all_of):
+            continue
+        if any_of and not any(re.search(t, low) for t in any_of):
+            continue
+        if slug.startswith("ciprb_notification_slip") and re.search(
+                r"\b0?1\b|\bone\b", low) and re.search(r"\b0?2\b|\btwo\b", low):
+            return None  # names both slips: ambiguous
+        return slug
+    return None
 
 
 class Command(BaseCommand):
@@ -63,14 +124,20 @@ class Command(BaseCommand):
                             help="Wire the slug-in-URL endpoint "
                                  "(/webhook/programs/form/<id_string>/) instead of the "
                                  "shared fallback (/webhook/programs/).")
+        parser.add_argument("--canonical", action="store_true",
+                            help="Wire each form to /webhook/programs/form/<CANONICAL_SLUG>/ "
+                                 "where the slug is an exact FORM_HANDLERS key resolved "
+                                 "from the Kobo asset NAME. Unrecognised names are left "
+                                 "untouched and listed. Implied by --on-boot.")
         parser.add_argument("--contains", default="",
                             help="Only touch assets whose name contains this text.")
         parser.add_argument("--asset", action="append", default=[],
                             help="Limit to these asset uid(s). Repeatable.")
         parser.add_argument("--on-boot", action="store_true",
                             help="Deploy-time mode: add-only (never cutover) and never "
-                                 "raise. If prerequisites are missing it prints a notice "
-                                 "and exits 0, so it is safe in the boot chain.")
+                                 "raise, and implies --canonical. If prerequisites are "
+                                 "missing it prints a notice and exits 0, so it is safe "
+                                 "in the boot chain.")
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _token(self):
@@ -130,23 +197,45 @@ class Command(BaseCommand):
                 self.stdout.write(f"rewire_kobo_hooks skipped: {exc}")
                 return
             raise
+        try:
+            self._rewire(opts, token, public, secret)
+        except Exception as exc:  # noqa: BLE001 - boot mode must never crash the deploy
+            if not on_boot:
+                raise
+            self.stdout.write(f"rewire_kobo_hooks aborted (non-fatal): {exc!r}")
+
+    def _rewire(self, opts, token, public, secret):
+        on_boot = opts["on_boot"]
+        canonical = opts["canonical"] or on_boot
         headers = {"Authorization": f"Token {token}"}
         dry = opts["dry_run"]
         cutover = opts["cutover"] and not on_boot  # boot mode is always add-only
+        handlers = None
+        if canonical:
+            from programs.webhook import FORM_HANDLERS as handlers
 
         host = requests.utils.urlparse(public).netloc
         self.stdout.write(f"Target instance : {public}")
         self.stdout.write(f"Kobo API        : {API}")
         self.stdout.write(f"Mode            : "
                           f"{'DRY RUN' if dry else 'LIVE'}"
-                          f"{' + cutover' if cutover else ''}")
+                          f"{' + cutover' if cutover else ''}"
+                          f"{' [canonical per-form routing]' if canonical else ''}")
         self.stdout.write("")
 
         touched = added = updated = removed = skipped = 0
+        unmapped = []
         for a in self._assets(headers, opts["contains"], set(opts["asset"])):
             uid = a["uid"]
             name = a.get("name") or uid
-            if opts["by_form"]:
+            if canonical:
+                slug = resolve_canonical_slug(name)
+                if not slug or slug not in handlers:
+                    self.stdout.write(f"  [unmapped]    {name} ({uid})  -> left untouched")
+                    unmapped.append((name, uid))
+                    continue
+                endpoint = f"{public}/webhook/programs/form/{slug}/"
+            elif opts["by_form"]:
                 slug = (a.get("deployment__identifier") or "").rstrip("/").rsplit("/", 1)[-1] \
                        or uid
                 endpoint = f"{public}/webhook/programs/form/{slug}/"
@@ -156,6 +245,13 @@ class Command(BaseCommand):
             hooks = requests.get(f"{API}/assets/{uid}/hooks/", headers=headers,
                                  timeout=60).json().get("results", [])
             mine = [h for h in hooks if h.get("endpoint") == endpoint]
+            if canonical and not mine:
+                # Re-point our own earlier hook (same host, /webhook/programs...)
+                # instead of adding a second hook that would double-post.
+                mine = [h for h in hooks
+                        if h.get("name") == HOOK_NAME
+                        and requests.utils.urlparse(h.get("endpoint", "")).netloc == host
+                        and "/webhook/programs" in (h.get("endpoint") or "")][:1]
             stale = [h for h in hooks
                      if requests.utils.urlparse(h.get("endpoint", "")).netloc
                      not in ("", host)
@@ -204,6 +300,16 @@ class Command(BaseCommand):
             f"Done. assets touched={touched} added={added} updated={updated} "
             f"stale_removed={removed} skipped={skipped}"
             f"{'  (dry run, nothing written)' if dry else ''}"))
+        if canonical:
+            self.stdout.write(f"Canonical hooks: added={added} updated={updated}")
+            if unmapped:
+                self.stdout.write(self.style.WARNING(
+                    f"UNMAPPED deployed assets ({len(unmapped)}), left untouched; "
+                    "extend NAME_TO_SLUG_RULES to route them:"))
+                for n, u in unmapped:
+                    self.stdout.write(f"  - {n}  (uid {u})")
+            else:
+                self.stdout.write("No unmapped deployed assets.")
         if not dry:
             self.stdout.write(
                 "Next: submit one test record from Kobo and confirm it appears in this "
