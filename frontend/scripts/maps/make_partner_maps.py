@@ -192,6 +192,11 @@ def draw_map(ax, spec, geo):
     km_per_deg = 111.32 * math.cos(math.radians(23.7))
     bar = 100 / km_per_deg
     x0, y0 = max(xs) - 0.05 - bar, min(ys) + 0.22
+    # White inset box behind the scale bar, so coastal island slivers and any
+    # leader line passing through the corner cannot merge with the labels.
+    ax.add_patch(Rectangle((x0 - 0.10, y0 - 0.20), bar + 0.20, 0.33,
+                           facecolor='white', edgecolor='#d7dde1',
+                           linewidth=0.6, zorder=8.5))
     for i in range(2):
         ax.add_patch(Rectangle((x0 + i * bar / 2, y0), bar / 2, 0.055,
                                facecolor=INK if i == 0 else 'white',
@@ -265,31 +270,45 @@ def draw_legend(fig, rows, *, y, x0=0.06, x1=0.955, size=9.2):
         x += w + gap
 
 
+FIG_W, FIG_H = 8.27, 11.69                       # A4 portrait, inches
+
+
+def _map_rect(geo, *, left, width, top):
+    """Axes rect whose shape matches the rendered country, so the map fills it
+    with no internal letterbox white band. Height is derived from width and the
+    equirectangular aspect at this latitude."""
+    xs = [p[0] for f in geo['features'] for r in rings(f['geometry']) for p in r]
+    ys = [p[1] for f in geo['features'] for r in rings(f['geometry']) for p in r]
+    pad = 0.12
+    w_units = (max(xs) - min(xs)) + 2 * pad
+    h_units = ((max(ys) - min(ys)) + 2 * pad) * (1 / math.cos(math.radians(23.7)))
+    ratio_wh = w_units / h_units
+    h_frac = (width * FIG_W / ratio_wh) / FIG_H
+    return [left, top - h_frac, width, h_frac]
+
+
 def page(spec, geo):
-    fig = plt.figure(figsize=(8.27, 11.69))     # A4 portrait
+    fig = plt.figure(figsize=(FIG_W, FIG_H))
     fig.patch.set_facecolor('white')
-    # Narrower map, centred, leaving a gutter each side for the name columns.
-    ax = fig.add_axes([0.235, 0.11, 0.53, 0.75])
+    # Big map: sized to the country's true shape and placed just under the
+    # title, with slim side gutters for the name columns. No count line, no
+    # source line, no boundary note (removed per CIPRB review), so the map
+    # takes the page instead of floating in white space.
+    rect = _map_rect(geo, left=0.14, width=0.72, top=0.88)
+    ax = fig.add_axes(rect)
     anchors = draw_map(ax, spec, geo)
     gutter_labels(fig, ax, anchors)
-    draw_legend(fig, spec['legend'], y=0.068)
+    draw_legend(fig, spec['legend'], y=max(0.045, rect[1] - 0.05))
 
-    fig.text(0.06, 0.945, spec['title'], fontsize=21, fontweight='bold', color=INK)
-    fig.text(0.06, 0.925, spec['subtitle'], fontsize=10.2, color=ASH)
-    fig.add_artist(plt.Line2D([0.06, 0.94], [0.912, 0.912], color='#F96000',
+    fig.text(0.06, 0.955, spec['title'], fontsize=22, fontweight='bold', color=INK)
+    fig.text(0.06, 0.933, spec['subtitle'], fontsize=10.6, color=ASH)
+    fig.add_artist(plt.Line2D([0.06, 0.94], [0.920, 0.920], color='#F96000',
                               linewidth=1.6, transform=fig.transFigure))
-    n = len(spec['classes'])
-    fig.text(0.06, 0.886, f'{n} districts', fontsize=10, color=INK, fontweight='bold')
-    fig.text(0.94, 0.886, f'SIMPLE dashboard  ·  {DATED}', fontsize=9, color=ASH, ha='right')
-    fig.text(0.06, 0.022, 'Boundaries: Bangladesh district boundaries (ADM2). '
-             'Each name is tied by a leader to its district; a two-partner district is shown in its own colour.',
-             fontsize=8, color=ASH)
 
     out = []
-    # Desktop pack only. The partner coverage maps are NOT served on the
-    # dashboard (Home, PHD and Bandhu use the interactive Leaflet map); only
-    # the CIPRB donor sheets go into frontend/public/maps. So this writes the
-    # print PDF and a raster into the Desktop folder and nothing into the app.
+    # Desktop pack only: both PDF and PNG.
+    png = os.path.join(DESK, f'{spec["file"]}.png')
+    fig.savefig(png, dpi=200, facecolor='white'); out.append(png)
     fig.savefig(os.path.join(WORK, f'{spec["file"]}.png'), dpi=PRINT_DPI, facecolor='white')
     pdf = os.path.join(DESK, f'{spec["file"]}.pdf')
     fig.savefig(pdf, dpi=PRINT_DPI, facecolor='white'); out.append(pdf)

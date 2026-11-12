@@ -8,9 +8,12 @@ an enumerator types 1-0001 in Form 2 (Service Log), Kobo reads this CSV
 and displays her name / age / address / status read-only, confirming they
 have the right woman before she fills any clinical fields.
 
-CSV columns (kept in sync with the Master List headers):
-    id_no          — the lookup key. Normalised (trim + upper).
-    name           — display.
+CSV columns:
+    name           — select_one_from_file VALUE = her id_no (trim + upper).
+    label          — dropdown display, "1-0001 | Josna | Jeshore".
+    centre_slug    — ServiceCenter.code; drives the per-centre choice_filter.
+    id_no          — pulldata lookup key (same value as name).
+    person_name    — pulldata display name (was 'name' before the dropdown).
     mother_name    — display.
     birth_year     — display.
     age            — computed (current year - birth_year).
@@ -97,28 +100,44 @@ def build_csv() -> tuple[bytes, int]:
         .filter(organisation='PHD',
                 approval_status__in=[Client.APPROVED, Client.PENDING])
         .exclude(name='')         # drop stubs
+        .select_related('center')
         .order_by('client_id')
     )
     this_year = datetime.date.today().year
 
     buf = io.StringIO()
     writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    # select_one_from_file reads `name` (stored value = her id_no) and `label`
+    # (what the searchable dropdown shows); `centre_slug` drives the per-centre
+    # choice_filter. pulldata() still fills the read-only confirmation block,
+    # now keyed on `id_no` and returning `person_name` (the display name was
+    # moved out of `name`, which the dropdown needs for the stored value).
     writer.writerow([
-        'id_no', 'name', 'mother_name', 'birth_year', 'age',
+        'name', 'label', 'centre_slug',
+        'id_no', 'person_name', 'mother_name', 'birth_year', 'age',
         'address', 'marital_status', 'education',
         'has_nid', 'uses_fp', 'status',
     ])
 
     count = 0
     for c in qs.iterator():
+        nid = _norm_id(c.client_id)
         age = (this_year - c.birth_year) if c.birth_year else ''
+        addr = (c.current_address or '').replace('\n', ' ').strip()
+        slug = c.center.code if c.center_id else ''
+        # Dropdown label — "1-0001 | Josna | Jeshore". Both the ID and the name
+        # are in the label so the worker can search the autocomplete by either.
+        label = ' | '.join(p for p in (nid, c.name, addr) if p)
         writer.writerow([
-            _norm_id(c.client_id),
-            c.name,
+            nid,                       # name        = select_one_from_file value
+            label,                     # label       = dropdown display
+            slug,                      # centre_slug = choice_filter key
+            nid,                       # id_no       = pulldata lookup key
+            c.name,                    # person_name = pulldata display name
             c.mother_name,
             c.birth_year or '',
             age,
-            (c.current_address or '').replace('\n', ' ').strip(),
+            addr,
             MARITAL_LABELS.get(c.marital_status, ''),
             EDUCATION_LABELS.get(c.education_level, ''),
             _yes_no(c.has_nid),
