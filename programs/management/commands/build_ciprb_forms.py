@@ -149,20 +149,29 @@ YES_NO = [
 
 
 # ─── Shared submission header (CIPRB org + GPS + district + enumerator) ─────
-def _meta(form_id_visible='', form_id_visible_bn=''):
+def _meta(form_id_visible='', form_id_visible_bn='', gps_required=True):
     """Common opening section every CIPRB form starts with.
 
     `form_id_visible` is the human-visible serial number CIPRB uses on
     paper (e.g. মাতৃমৃত্যুর বাৎসরিক ক্রমিক নং on MPDSR Form 1). It is
     captured as text so the field worker can copy what the paper carries;
-    Django persists a UUID separately."""
+    Django persists a UUID separately.
+
+    `gps_required` makes the GPS point optional. Facility forms filled inside
+    a building (e.g. the Safe Surgery checklist in an operating theatre) often
+    cannot get a GPS fix, and a required geopoint then blocks the whole
+    submission in KoboCollect. Those forms already capture district / upazila /
+    facility, so the point is optional there."""
     bn_label = form_id_visible_bn or form_id_visible
+    gps_en = ('GPS location (required — step outside if no signal)'
+              if gps_required else 'GPS location (optional, record if available)')
+    gps_bn = ('জিপিএস অবস্থান (প্রয়োজনীয়)'
+              if gps_required else 'জিপিএস অবস্থান (ঐচ্ছিক, থাকলে দিন)')
     return [
         _sr('begin_group', 'grp_meta', 'Submission info', 'তথ্য প্রেরণ'),
         _sr('calculate', 'organisation', '', '', calc="'CIPRB'"),
-        _sr('geopoint', 'location',
-            'GPS location (required — step outside if no signal)',
-            'জিপিএস অবস্থান (প্রয়োজনীয়)', required='yes'),
+        _sr('geopoint', 'location', gps_en, gps_bn,
+            required=('yes' if gps_required else '')),
         _sr('date', 'collection_date', 'Date', 'তারিখ', required='yes'),
         _sr('select_one district', 'district',
             'District', 'জেলা', required='yes'),
@@ -3962,7 +3971,9 @@ def _safe_surgery_choices():
 
 
 def _safe_surgery_survey():
-    rows = list(_meta())
+    # GPS optional: the checklist is filled inside an operating theatre, where a
+    # required geopoint could not get a fix and blocked the whole submission.
+    rows = list(_meta(gps_required=False))
     rows += [
         # ── Header (verbatim from the printed form) ──────────────────────────
         _sr('begin_group', 'grp_op', 'Surgical Safety Checklist',

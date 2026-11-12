@@ -5,10 +5,7 @@ Period args: period_start, period_end are date objects.
 """
 from django.db.models import Q, Sum
 from programs.models import (
-    Client, ClinicVisit, HIVSTITestResult, HTCCounselling,
-    IndividualCounselling, GroupEducationSession, OutreachSession,
-    GBVCase, Referral, ServiceCenter, TrainingEvent, CoordMeeting, MobileHealthCamp,
-    IECMaterial, WellnessLogbookEntry,
+    Referral, WellnessLogbookEntry, BandhuActivityReport,
 )
 
 
@@ -26,29 +23,41 @@ ORG = 'Bandhu'
 APPROVED = 'APPROVED'
 
 
+def _rsum(org, period_start, period_end, field):
+    """Sum a field across APPROVED Bandhu Activity & Operations reports in the
+    period. The live Activity form is an aggregate per-centre tally, so each
+    activity indicator is the sum of its reported number (Rafi 2026-11-12)."""
+    return BandhuActivityReport.objects.filter(
+        organisation=org, approval_status=APPROVED,
+        report_date__range=(period_start, period_end),
+    ).aggregate(t=Sum(field))['t'] or 0
+
+
 def compute_I_BND_1_1(org, period_start, period_end):
-    """KP individuals reached — the Mother List registry. Target: 4,000.
+    """KP individuals reached — distinct beneficiaries served in the Beneficiary
+    Service Log. Target: 4,000.
 
-    Rafi's M&E decision (2026-07-01): 'KP reached' is measured by the Mother
-    List (F-1.1 registration) — the register of KP individuals the programme has
-    enrolled — NOT the F-05/F-06 service sub-counts. HIV/STI/HTC service delivery
-    is tracked separately by 1.5a (STI services) and 1.5b (HIV testing), so this
-    no longer double-reads those forms.
-
-    Counts registered, APPROVED, non-stub Bandhu clients by registration date
-    (Client.created_at). Cumulative = the whole registry; monthly = new
-    registrations that month. Registration is auto-approved for Bandhu, so the
-    number reflects the live Mother List (stubs — name ''/'Unknown' created by a
-    service log citing an unregistered ID — are excluded, mirroring the client
-    lookup-CSV exporter)."""
-    return (
-        Client.objects.filter(
-            organisation=org, approval_status=Client.APPROVED,
-            created_at__date__range=(period_start, period_end),
-        )
-        .exclude(name='').exclude(name='Unknown')
-        .values('client_id').distinct().count()
+    Rafi's M&E decision (2026-11-12): 'KP reached' is now measured by the
+    DISTINCT persons appearing in the Beneficiary Service Log
+    (bandhu_service_log_v1), NOT the Mother List registration count. The
+    canonical per-client row the Service Log always writes is the F-01
+    WellnessLogbookEntry (programs/bandhu_handlers.py _bnd_logbook), which stamps
+    each served beneficiary's normalised id. So distinct reached = distinct
+    normalised client id on APPROVED logbook rows in the period, falling back to
+    the raw id where the norm is blank. Cumulative = all distinct served;
+    monthly = distinct served that month. The Mother List registry (Client) is
+    retained but no longer drives 1.1."""
+    qs = _logbook(org, period_start, period_end)
+    norm = set(
+        qs.exclude(client_id_norm__isnull=True).exclude(client_id_norm='')
+        .values_list('client_id_norm', flat=True)
     )
+    raw = set(
+        qs.filter(Q(client_id_norm__isnull=True) | Q(client_id_norm=''))
+        .exclude(client_id='').exclude(client_id__isnull=True)
+        .values_list('client_id', flat=True)
+    )
+    return len(norm | raw)
 
 
 def compute_I_BND_1_2(org, period_start, period_end):
@@ -75,20 +84,9 @@ def compute_I_BND_1_3(org, period_start, period_end):
 
 
 def compute_I_BND_1_4A(org, period_start, period_end):
-    """Outreach + health-education sessions conducted. Target: 480 (MIS doc).
-
-    Counts both the daily outreach monitoring submissions (OutreachSession,
-    F-04) and any group health-education sessions (GroupEducationSession) —
-    each row is one session conducted."""
-    outreach = OutreachSession.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        session_date__range=(period_start, period_end),
-    ).count()
-    group = GroupEducationSession.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        session_date__range=(period_start, period_end),
-    ).count()
-    return outreach + group
+    """Outreach + health-education sessions conducted. Target: 288 (MIS doc).
+    Sum of the Activity report `outreach_sessions` tally."""
+    return _rsum(org, period_start, period_end, 'outreach_sessions')
 
 
 # NOTE: indicator 1.4b ("KP reached via outreach", 4,000) was retired per the
@@ -124,15 +122,9 @@ def compute_I_BND_1_5_sti(org, period_start, period_end):
 
 
 def compute_I_BND_1_6(org, period_start, period_end):
-    """KP clinic (Dhaka) functional. Target: 1.
-
-    Counts the Dhaka KP-clinic centre only once it is actually delivering
-    services in the period (>=1 approved record). A configured-but-idle centre
-    reads 0 until real activity arrives — see indicators/_centers.py."""
-    base = ServiceCenter.objects.filter(
-        organisation=org, is_active=True, district__icontains='Dhaka'
-    )
-    return len(active_center_ids(period_start, period_end, base))
+    """KP clinics supported with logistics/supplies/maintenance. Target: 1.
+    Sum of the Activity report `supported_clinics` tally (Rafi 2026-11-12)."""
+    return _rsum(org, period_start, period_end, 'supported_clinics')
 
 
 def compute_I_BND_1_7(org, period_start, period_end):
@@ -146,128 +138,65 @@ def compute_I_BND_1_7(org, period_start, period_end):
 
 
 def compute_I_BND_1_8(org, period_start, period_end):
-    """Community-friendly drop-in centres established/strengthened.
-    Target: 8 (MIS doc — one per project district).
-
-    Counts DIC centres actually delivering services in the period (>=1 approved
-    record). A configured-but-idle DIC reads 0 until real activity arrives, so a
-    pre-launch system shows 0/8, not 8/8 — see indicators/_centers.py."""
-    base = ServiceCenter.objects.filter(
-        organisation=org, is_active=True, center_type='DIC'
-    )
-    return len(active_center_ids(period_start, period_end, base))
+    """Community-friendly drop-in centres established/strengthened. Target: 8.
+    Sum of the Activity report `wellness_centres_improved` tally (Rafi 2026-11-12)."""
+    return _rsum(org, period_start, period_end, 'wellness_centres_improved')
 
 
 def compute_I_BND_1_9(org, period_start, period_end):
     """Mobile outreach health camps conducted. Target: 40 camps (MIS doc).
-
-    The F-10 form records one row per patient, so a camp = a distinct
-    (centre, date) pair — count those, not patient rows."""
-    return MobileHealthCamp.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        camp_date__range=(period_start, period_end),
-    ).values('center', 'camp_date').distinct().count()
+    Sum of the Activity report `mobile_health_camps` tally."""
+    return _rsum(org, period_start, period_end, 'mobile_health_camps')
 
 
 def compute_I_BND_2_1(org, period_start, period_end):
-    """Health managers oriented. Target: 150"""
-    return TrainingEvent.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        event_date__range=(period_start, period_end),
-        participant_type__in=['HM', 'GOB'],
-        event_type='orientation',
-    ).aggregate(t=Sum('total_participants'))['t'] or 0
+    """Gov health managers/supervisors oriented. Target: 192.
+    Sum of the Activity report `orientation_participants` tally."""
+    return _rsum(org, period_start, period_end, 'orientation_participants')
 
 
 def compute_I_BND_2_2(org, period_start, period_end):
-    """Midwives/frontline providers trained. Target: 150"""
-    return TrainingEvent.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        event_date__range=(period_start, period_end),
-        participant_type='MW',
-        event_type='training',
-    ).aggregate(t=Sum('total_participants'))['t'] or 0
+    """Midwives/frontline providers trained. Target: 192.
+    Sum of the Activity report `midwife_trainees` tally."""
+    return _rsum(org, period_start, period_end, 'midwife_trainees')
 
 
 def compute_I_BND_2_3(org, period_start, period_end):
-    """GOB coordination meetings. Target: 12"""
-    return CoordMeeting.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        meeting_date__range=(period_start, period_end),
-        meeting_type='GOB',
-    ).count()
+    """GOB/midwife/NGO coordination meetings. Target: 16.
+    Sum of the Activity report `gov_ngo_meetings` tally."""
+    return _rsum(org, period_start, period_end, 'gov_ngo_meetings')
 
 
 def compute_I_BND_2_4(org, period_start, period_end):
-    """CBO coordination meetings. Target: 10"""
-    return CoordMeeting.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        meeting_date__range=(period_start, period_end),
-        meeting_type='CBO',
-    ).count()
+    """CBO/community-network coordination meetings. Target: 16.
+    Sum of the Activity report `cbo_meetings` tally."""
+    return _rsum(org, period_start, period_end, 'cbo_meetings')
 
 
 def compute_I_BND_2_5(org, period_start, period_end):
-    """Community leaders/PEs trained. Target: 125"""
-    return TrainingEvent.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        event_date__range=(period_start, period_end),
-        participant_type__in=['PE', 'CL'],
-    ).aggregate(t=Sum('total_participants'))['t'] or 0
+    """Community leaders/peer educators trained. Target: 160.
+    Sum of the Activity report `peer_educator_participants` tally."""
+    return _rsum(org, period_start, period_end, 'peer_educator_participants')
 
 
 def compute_I_BND_2_6(org, period_start, period_end):
-    """Day-observance / awareness events supported. Target: 2.
-
-    Counts CoordMeeting rows of type DAY_OBSERVANCE (added in audit FIX 12.4).
-    World AIDS Day, Hijra Pride, Human Rights Day, etc. all flow through
-    this single meeting_type so the indicator has one clean source."""
-    return CoordMeeting.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        meeting_date__range=(period_start, period_end),
-        meeting_type=CoordMeeting.DAY_OBSERVANCE,
-    ).count()
+    """National/international observance events supported. Target: 2.
+    Sum of the Activity report `observance_event_count` tally."""
+    return _rsum(org, period_start, period_end, 'observance_event_count')
 
 
 def compute_I_BND_4_1(org, period_start, period_end):
-    """IEC/SBCC materials distributed. Target: 50,000.
-
-    Canonical source is IECMaterial, plus IEC quantities recorded on outreach
-    (F-04 or_iec). Clinic-visit condoms are NOT counted here — condoms are not
-    IEC/SBCC materials (Ashis / CIPRB MIS review, 2026-07-07); counting them
-    under 4.1 over-stated the indicator, so the ClinicVisit.condoms_distributed
-    term was removed."""
-    iec = IECMaterial.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        date_distributed__range=(period_start, period_end),
-        material_type__in=[
-            IECMaterial.LEAFLET, IECMaterial.POSTER, IECMaterial.MESSAGE_BOARD,
-            IECMaterial.SIGNBOARD, IECMaterial.OTHER,
-        ],
-    ).aggregate(t=Sum('quantity'))['t'] or 0
-
-    outreach = OutreachSession.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        session_date__range=(period_start, period_end),
-    ).aggregate(t=Sum('iec_bcc_materials_distributed'))['t'] or 0
-
-    logbook = _logbook(org, period_start, period_end).aggregate(
-        t=Sum('iec'))['t'] or 0
-
-    return iec + outreach + logbook
+    """IEC/SBCC materials disseminated. Target: 16,800.
+    Sum of the Activity report `iec_sbcc_distributed` tally (Rafi 2026-11-12:
+    the Activity form's dedicated SBCC field; the Service Log's per-person IEC
+    is stored but not summed here, to avoid a double-count)."""
+    return _rsum(org, period_start, period_end, 'iec_sbcc_distributed')
 
 
 def compute_I_BND_4_2(org, period_start, period_end):
-    """Public messaging displays installed. Target: 56 (MIS doc, code 4.2 —
-    40 printed billboards + 16 e-billboards).
-
-    The framework lists displays as ONE indicator, so this sums both the
-    printed (BILLBOARD) and digital (DIGITAL) IEC material types."""
-    return IECMaterial.objects.filter(
-        organisation=org, approval_status=APPROVED,
-        date_distributed__range=(period_start, period_end),
-        material_type__in=[IECMaterial.BILLBOARD, IECMaterial.DIGITAL],
-    ).aggregate(t=Sum('quantity'))['t'] or 0
+    """Public messaging displays installed. Target: 56.
+    Sum of the Activity report `messaging_displays_installed` tally."""
+    return _rsum(org, period_start, period_end, 'messaging_displays_installed')
 
 
 # ─── Activity-code registry ──────────────────────────────────────────────────

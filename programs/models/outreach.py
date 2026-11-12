@@ -131,7 +131,7 @@ class WellnessLogbookEntry(SubmissionBase):
     # normalised form the indicators/join use (backfilled from centre + serial).
     client_id = models.CharField(max_length=50, blank=True)
     client_id_norm = models.CharField(max_length=50, blank=True, db_index=True)
-    tg_code = models.CharField(max_length=10, blank=True)
+    tg_code = models.CharField(max_length=50, blank=True)
 
     # ─── Service flags (F-01 services block) — counted by the Bandhu indicators ──
     sti_screening = models.BooleanField(default=False)   # → 1.5a STI services

@@ -40,7 +40,7 @@ SURVEY_HDR = [
     'type','name','label::English','label::Bangla',
     'hint::English','hint::Bangla','required','relevant','constraint',
     'constraint_message::English','constraint_message::Bangla',
-    'default','appearance','calculation',
+    'default','appearance','calculation','choice_filter',
 ]
 CHOICES_HDR = ['list_name','name','label::English','label::Bangla']
 SETTINGS_HDR = ['form_title','form_id','version','default_language','style']
@@ -67,7 +67,7 @@ def _split_bn(text):
 
 def _sr(qtype, name, en='', bn='', hint='', required='',
         relevant='', constraint='', cmsg='', default='', app='', calc='',
-        hint_bn='', cmsg_bn=''):
+        hint_bn='', cmsg_bn='', cf=''):
     """One survey row.
 
     hint and cmsg may carry both languages in one string ("English / বাংলা");
@@ -75,13 +75,16 @@ def _sr(qtype, name, en='', bn='', hint='', required='',
     to be translated once any of them is, so a missing Bangla side falls back
     to the English text rather than being left blank, which would render an
     empty hint for Bangla users.
+
+    cf is the choice_filter expression — used by select_one_from_file fields to
+    scope the dropdown (e.g. centre_slug=${centre_id}).
     """
     h_en, h_split = _split_bn(hint)
     c_en, c_split = _split_bn(cmsg)
     h_bn = hint_bn or h_split or h_en
     c_bn = cmsg_bn or c_split or c_en
     return [qtype, name, en, bn, h_en, h_bn, required, relevant,
-            constraint, c_en, c_bn, default, app, calc]
+            constraint, c_en, c_bn, default, app, calc, cf]
 
 
 def _ch(lst, name, en, bn=''):
@@ -242,7 +245,7 @@ def _form1_survey():
             # ' 1-0001 ' all collide. The developer reassigns IDs from the
             # dashboard, not this field form, so they are exempt.
             constraint=("starts-with(normalize-space(.), ${_exp_prefix}) and "
-                        "pulldata('phd_clients','name','id_no',"
+                        "pulldata('phd_clients','person_name','id_no',"
                         "translate(normalize-space(.),"
                         "'abcdefghijklmnopqrstuvwxyz',"
                         "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))=''"),
@@ -259,7 +262,7 @@ def _form1_survey():
         # XPath 1.0 equivalent of trim+upper: translate(normalize-space(...)).
         # (Kobo/ODK rejected upper-case() — that's XPath 2.0.)
         _sr('calculate','_dup_name',
-            calc=("pulldata('phd_clients','name','id_no',"
+            calc=("pulldata('phd_clients','person_name','id_no',"
                   "translate(normalize-space(${id_no}),"
                   "'abcdefghijklmnopqrstuvwxyz',"
                   "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))")),
@@ -938,7 +941,11 @@ def _form_service_log_survey():
     """Build the merged Service Log survey:
        meta → record_type selector → patient_id_group (pulldata)
        → 9 gated sections."""
-    rows = _meta(center_required=False)
+    # Centre is now REQUIRED: the FSW dropdown (patient_id_group) is filtered by
+    # the selected centre (choice_filter centre_slug=${centre_id}), so without a
+    # centre the dropdown would be empty. Every PHD record is tied to a wellness
+    # centre anyway, so requiring it is correct.
+    rows = _meta(center_required=True)
     rows += [
         _sr('select_one record_type','record_type',
             'What are you recording today?',
@@ -987,14 +994,21 @@ def _patient_id_group():
             'যৌনকর্মীর পরিচয় (মাদারলিস্ট থেকে স্বয়ংক্রিয়)',
             relevant=REL),
 
-        _sr('text','client_id',
-            'FSW ID No.','যৌনকর্মীর আইডি নম্বর',
+        # Searchable dropdown from the Master List CSV (same UX as the CIPRB
+        # fistula form): the worker searches by ID or name and PICKS her from
+        # the list instead of typing the raw ID blind. The stored value is her
+        # id_no (the CSV 'name' column), scoped to the selected centre so each
+        # enumerator sees only their own centre's FSWs.
+        _sr('select_one_from_file phd_clients.csv','client_id',
+            'Registered FSW (ID — name)','নিবন্ধিত যৌনকর্মী (আইডি — নাম)',
             required='yes',
-            hint='Type her registered ID, e.g. 1-0001 (centre number + serial).',
-            hint_bn='তাঁর নিবন্ধিত আইডি লিখুন, যেমন 1-0001 (সেন্টার নম্বর + ক্রমিক নম্বর)।'),
+            app='autocomplete',
+            cf='centre_slug=${centre_id}',
+            hint='Search by ID or name, then pick her from the list.',
+            hint_bn='আইডি বা নাম দিয়ে খুঁজুন, তারপর তালিকা থেকে নির্বাচন করুন।'),
 
-        # pulldata() lookups — all keyed on the upper-cased client_id.
-        _sr('calculate','_pull_name',     calc=PULL.format(col='name')),
+        # pulldata() lookups — all keyed on the selected client_id (= her id_no).
+        _sr('calculate','_pull_name',     calc=PULL.format(col='person_name')),
         _sr('calculate','_pull_mother',   calc=PULL.format(col='mother_name')),
         _sr('calculate','_pull_birth',    calc=PULL.format(col='birth_year')),
         _sr('calculate','_pull_age',      calc=PULL.format(col='age')),

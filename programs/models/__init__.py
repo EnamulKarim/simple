@@ -11,6 +11,7 @@ from .operations import TrainingEvent, CoordMeeting, MobileHealthCamp, VisitorRe
 from .gbv_corner import GBVCornerRecord
 from .counselling_report import PHDCounsellingReport
 from .nil_report import NilReport
+from .activity_report import BandhuActivityReport
 from .withdrawal import KoboWithdrawal, KoboSyncRun
 
 __all__ = [
