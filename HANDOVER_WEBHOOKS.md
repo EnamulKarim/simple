@@ -32,6 +32,8 @@ old instance. The new one receives nothing. Two more things must line up:
 | `FERNET_KEY` | the SAME key as the old instance, or encrypted PII cannot be read |
 | `SECRET_KEY` | a Django secret key |
 | `DATABASE_URL` | `${{ Postgres.DATABASE_URL }}` (the attached Postgres plugin) |
+| `KOBO_API_TOKEN` | a Kobo API token that owns the forms |
+| `REWIRE_HOOKS_ON_BOOT` | `1` so the hooks repoint automatically on every deploy |
 
 `FERNET_KEY` must be carried over exactly. Fistula and MPDSR data is encrypted with
 it; a new key makes the restored data unreadable.
@@ -44,15 +46,20 @@ Restore the backup `.dump` into the new instance's Postgres (Postgres 18):
 
 ### 3. Repoint the Kobo hooks at the new instance
 
-With a Kobo API token that owns the forms set as `KOBO_API_TOKEN` in the
-environment, run (preview first):
+**Automatic (recommended).** With `REWIRE_HOOKS_ON_BOOT=1` and `KOBO_API_TOKEN` set
+(step 1), the hooks repoint themselves on every deploy. Just redeploy once after
+setting the env vars and it is done, no command to run. The boot-time run is
+add-only and never fails the deploy: if anything is missing it logs a notice and
+carries on.
+
+**Manual (optional, same effect).** You can also run it yourself, preview first:
 
     railway run python manage.py rewire_kobo_hooks --dry-run
     railway run python manage.py rewire_kobo_hooks
 
-This adds or updates each form's hook so Kobo posts to `SIMPLE_PUBLIC_URL`, using
-the secret this instance validates against. It is non-destructive by default: the
-old deployment keeps receiving too, so nothing breaks during the transition.
+Either way it adds or updates each form's hook so Kobo posts to `SIMPLE_PUBLIC_URL`,
+using the secret this instance validates against. It is non-destructive by default:
+the old deployment keeps receiving too, so nothing breaks during the transition.
 
 When the old deployment is being retired, cut the old hooks over as well:
 

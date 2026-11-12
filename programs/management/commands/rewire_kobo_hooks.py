@@ -67,6 +67,10 @@ class Command(BaseCommand):
                             help="Only touch assets whose name contains this text.")
         parser.add_argument("--asset", action="append", default=[],
                             help="Limit to these asset uid(s). Repeatable.")
+        parser.add_argument("--on-boot", action="store_true",
+                            help="Deploy-time mode: add-only (never cutover) and never "
+                                 "raise. If prerequisites are missing it prints a notice "
+                                 "and exits 0, so it is safe in the boot chain.")
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _token(self):
@@ -115,12 +119,20 @@ class Command(BaseCommand):
 
     # ── main ─────────────────────────────────────────────────────────────────
     def handle(self, *args, **opts):
-        token = self._token()
-        public = self._public_url()
-        secret = self._secret()
+        on_boot = opts["on_boot"]
+        try:
+            token = self._token()
+            public = self._public_url()
+            secret = self._secret()
+        except CommandError as exc:
+            if on_boot:
+                # Boot-time: never crash the deploy. Report and move on.
+                self.stdout.write(f"rewire_kobo_hooks skipped: {exc}")
+                return
+            raise
         headers = {"Authorization": f"Token {token}"}
         dry = opts["dry_run"]
-        cutover = opts["cutover"]
+        cutover = opts["cutover"] and not on_boot  # boot mode is always add-only
 
         host = requests.utils.urlparse(public).netloc
         self.stdout.write(f"Target instance : {public}")
