@@ -37,7 +37,7 @@ from .webhook import (
 from .models import (
     Client, ClinicVisit, HIVSTITestResult, IndividualCounselling,
     GBVCase, Referral, OutreachSession, MobileHealthCamp, WellnessLogbookEntry,
-    TrainingEvent, CoordMeeting, IECMaterial,
+    TrainingEvent, CoordMeeting, IECMaterial, BandhuActivityReport,
 )
 from ._base_choices import BANDHU_DISTRICT_CODE
 
@@ -372,16 +372,22 @@ for _dist, _code in BANDHU_DISTRICT_CODE.items():
     _CODE_TO_DISTRICT.setdefault(_code, _dist)
 
 
-def _person_center(payload):
-    code = _str(payload.get('submission_info/wellness_centre'))
-    district = _CODE_TO_DISTRICT.get(code)
+def _bnd_center_by_code(code):
+    """Resolve a Bandhu centre from the 2-digit district code (01-09) the live
+    forms send in their centre picker. Returns None when it can't be matched."""
+    district = _CODE_TO_DISTRICT.get(_str(code))
     if district:
         from .models import ServiceCenter
         c = ServiceCenter.objects.filter(
             organisation=ORG, is_active=True, district__iexact=district).first()
         if c:
             return c
-    return _get_center(payload, ORG)  # org fallback, never None for Bandhu
+    return None
+
+
+def _person_center(payload):
+    return (_bnd_center_by_code(payload.get('submission_info/wellness_centre'))
+            or _get_center(payload, ORG))  # org fallback, never None for Bandhu
 
 
 def _bnd_person_log(payload, lat, lng):
@@ -650,7 +656,59 @@ def _bnd_wellness_center_info(payload, lat, lng):
         staff_key='wc_num_staff', functional_key='wc_functional')
 
 
+def _bnd_activity_report(payload, lat, lng):
+    """Live aggregate Activity & Operations report → one BandhuActivityReport.
+
+    One submission = one centre's tallies for a reporting period. The Bandhu
+    activity indicators SUM these fields over APPROVED reports in the period
+    (indicators/bandhu.py). Lands PENDING (two-stage manager→UNFPA approval)."""
+    center = (_bnd_center_by_code(payload.get('report_info/wellness_centre'))
+              or _get_center(payload, ORG))
+    if not center:
+        return HttpResponse('center not found', status=400)
+    if _already_exists(BandhuActivityReport, payload):
+        return HttpResponse('OK', status=200)
+    g = payload.get
+    n = lambda k: max(0, _int_or_none(g(k)) or 0)
+    BandhuActivityReport.objects.create(
+        organisation=ORG, center=center,
+        report_date=_date(g('report_info/report_date')) or _sub_date(payload),
+        reporter_name=_str(g('report_info/reporter_name'))[:200],
+        new_mother_list=n('kp_individuals/new_mother_list'),
+        outreach_sessions=n('outreach_edu/outreach_sessions'),
+        outreach_participants=n('outreach_edu/outreach_participants'),
+        supported_clinics=n('clinic_support/supported_clinics'),
+        wellness_centres_improved=n('wellness_centers/wellness_centres_improved'),
+        mobile_health_camps=n('mobile_camps/mobile_health_camps'),
+        mobile_camp_participants=n('mobile_camps/mobile_camp_participants'),
+        mh_counseling_sessions=n('mh_sessions/mh_counseling_sessions'),
+        mh_participants=n('mh_sessions/mh_participants'),
+        orientation_sessions=n('government_orientation/orientation_sessions'),
+        orientation_participants=n('government_orientation/orientation_participants'),
+        midwife_training_sessions=n('midwife_training/midwife_training_sessions'),
+        midwife_trainees=n('midwife_training/midwife_trainees'),
+        gov_ngo_meetings=n('gov_ngo_coordination/gov_ngo_meetings'),
+        gov_ngo_participants=n('gov_ngo_coordination/gov_ngo_participants'),
+        cbo_meetings=n('cbo_coordination/cbo_meetings'),
+        cbo_participants=n('cbo_coordination/cbo_participants'),
+        peer_educator_trainings=n('peer_educator_training/peer_educator_trainings'),
+        peer_educator_participants=n('peer_educator_training/peer_educator_participants'),
+        observance_event_count=n('observance_events/observance_event_count'),
+        observance_participants=n('observance_events/observance_participants'),
+        iec_sbcc_distributed=n('iec_sbcc/iec_sbcc_distributed'),
+        messaging_displays_installed=n('messaging_displays/messaging_displays_installed'),
+        **_base_kwargs(payload, lat, lng),
+    )
+    return HttpResponse('Created', status=201)
+
+
 def handle_bandhu_activity_ops(payload, lat, lng):
+    # Live aggregate report form (no record_type; namespaced tally blocks).
+    if payload.get('report_info/wellness_centre') is not None or any(
+            k.startswith('report_info/') or k.startswith('outreach_edu/')
+            for k in payload):
+        return _bnd_activity_report(payload, lat, lng)
+    # Legacy per-event dispatch (kept for back-compat / replay).
     dispatch = {
         'outreach':              _bnd_outreach,
         'mobile_camp':           _bnd_camp,
