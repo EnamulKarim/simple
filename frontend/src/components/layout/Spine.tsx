@@ -202,15 +202,15 @@ const KOBO_GROUPS: KoboGroup[] = [
       // Mother List — beneficiary registration; builds the client master list
       // the Service Log/Activity forms autofill from (Bandhu's PHD-registration
       // equivalent). F-1.1.
-      { url: 'https://ee.kobotoolbox.org/x/VO1m2jh1',
+      { url: 'https://ee.kobotoolbox.org/x/ZJOuYkoH',
         label: 'Bandhu 0 — Mother List', labelBn: 'বন্ধু ০ — মাদার লিস্ট' },
       // Service Log — per-client registers (F-01 logbook, F-05 patient record,
       // F-06 HTC, F-02 GBV, F-03 MH counselling, Counseling, Referral, F-08).
-      { url: 'https://ee.kobotoolbox.org/x/DMOqdJFx',
+      { url: 'https://ee.kobotoolbox.org/x/TIw7oyx0',
         label: 'Bandhu 1 — Service Log', labelBn: 'বন্ধু ১ — সেবা লগ' },
       // Activity & Operations — F-04 outreach, F-10 mobile camp, F-11
       // attendance, F-12 event report, F-13 stock, F-14 e-billboard.
-      { url: 'https://ee.kobotoolbox.org/x/WoHgXucH',
+      { url: 'https://ee.kobotoolbox.org/x/0FkX1AXb',
         label: 'Bandhu 2 — Activity & Operations', labelBn: 'বন্ধু ২ — কার্যক্রম ও পরিচালন' },
       // Zero-day return — shared PHD + Bandhu form; each team picks its own centre.
       { url: 'https://ee.kobotoolbox.org/x/3Ke0ktqc',
