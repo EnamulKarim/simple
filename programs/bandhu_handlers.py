@@ -353,7 +353,97 @@ def _bnd_logbook(payload, lat, lng):
     return HttpResponse('Created', status=201)
 
 
+# ─── New grouped person-based Beneficiary Service Log ─────────────────────────
+#
+# The live Beneficiary Service Log (bandhu_service_log_v1, enketo TIw7oyx0) is a
+# person-based form: one submission = one beneficiary (selected from the Mother
+# List via pulldata) with namespaced service blocks (submission_info/*,
+# beneficiary/*, sti_service/*, hiv_test/*, gbv_support/*, mental_health/*,
+# other_services/*, commodities/*). It carries NO record_type. The whole
+# submission maps to ONE WellnessLogbookEntry — the canonical per-client row read
+# by the Bandhu service indicators (1.1 distinct reached, 1.2 gbv, 1.3 mhpss,
+# 1.5a sti, 1.5b htc, 4.1 iec) — plus an ART Referral when linkage is completed
+# (1.7).
+
+# wellness_centre choice = the 2-digit Bandhu district code (01-09); reverse the
+# district→code map so a submission resolves to its district's centre.
+_CODE_TO_DISTRICT = {}
+for _dist, _code in BANDHU_DISTRICT_CODE.items():
+    _CODE_TO_DISTRICT.setdefault(_code, _dist)
+
+
+def _person_center(payload):
+    code = _str(payload.get('submission_info/wellness_centre'))
+    district = _CODE_TO_DISTRICT.get(code)
+    if district:
+        from .models import ServiceCenter
+        c = ServiceCenter.objects.filter(
+            organisation=ORG, is_active=True, district__iexact=district).first()
+        if c:
+            return c
+    return _get_center(payload, ORG)  # org fallback, never None for Bandhu
+
+
+def _bnd_person_log(payload, lat, lng):
+    """Grouped person submission → WellnessLogbookEntry (+ ART Referral)."""
+    center = _person_center(payload)
+    if not center:
+        return HttpResponse('center not found', status=400)
+    if _already_exists(WellnessLogbookEntry, payload):
+        return HttpResponse('OK', status=200)
+    g = payload.get
+    yn = lambda k: _str(g(k)).lower() == 'yes'
+    n = lambda k: max(0, _int_or_none(g(k)) or 0)
+    raw_id = _str(g('beneficiary/person'))
+    norm_id = _norm_client_id(raw_id, center)
+    WellnessLogbookEntry.objects.create(
+        organisation=ORG, center=center,
+        service_date=_date(g('submission_info/service_date')) or _sub_date(payload),
+        client_id=raw_id, client_id_norm=norm_id,
+        tg_code=_str(g('beneficiary/selected_tg')),
+        sti_screening=yn('sti_service/sti_screening_done'),
+        htc=yn('hiv_test/hiv_test_done'),
+        clinical=yn('other_services/clinical_services'),
+        gbv=yn('gbv_support/gbv_support_given'),
+        mental_health=yn('mental_health/mhpss_counseling_given'),
+        counseling=yn('other_services/general_counseling'),
+        legal=yn('other_services/legal_support'),
+        recreation=yn('other_services/recreation'),
+        group_edu=yn('other_services/group_education'),
+        referral_codes=' '.join(_multi(payload, 'referral/referred_for')),
+        condom=n('commodities/condoms'), condom_demo=n('commodities/condom_demos'),
+        lubricant=n('commodities/lubricants'),
+        awareness=n('commodities/awareness_sessions'),
+        iec=n('commodities/iec_materials'),
+        **_base_kwargs(payload, lat, lng),
+    )
+    # 1.7 — ART linkage completed → Referral(type=art, outcome=completed).
+    art_linked = yn('art_linkage/linked_referred_art_treatment') or \
+        yn('hiv_test/hiv_positive_referred_art')
+    if art_linked and not _already_exists(Referral, payload):
+        Referral.objects.create(
+            organisation=ORG, center=center,
+            client=_client(payload, center, raw_id),
+            referral_date=(_date(g('referral/referral_date'))
+                           or _date(g('submission_info/service_date'))
+                           or _sub_date(payload)),
+            referral_type='art',
+            referral_reason='ART linkage (Beneficiary Service Log)',
+            referred_to=_str(g('art_linkage/linked_facility')),
+            outcome='completed',
+            outcome_date=_date(g('hiv_case_detail/art_starting_date')),
+            **_base_kwargs(payload, lat, lng),
+        )
+    return HttpResponse('Created', status=201)
+
+
 def handle_bandhu_service_log(payload, lat, lng):
+    # Live grouped person-based form (no record_type; namespaced fields).
+    if payload.get('beneficiary/person') is not None or any(
+            k.startswith('submission_info/') or k.startswith('sti_service/')
+            for k in payload):
+        return _bnd_person_log(payload, lat, lng)
+    # Legacy flat multi-record_type form (kept for back-compat / replay).
     dispatch = {
         'patient_record':   _bnd_patient,
         'htc':              _bnd_htc,
