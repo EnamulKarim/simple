@@ -5,7 +5,7 @@ Period args: period_start, period_end are date objects.
 """
 from django.db.models import Q, Sum
 from programs.models import (
-    Client, ClinicVisit, HIVSTITestResult, HTCCounselling,
+    ClinicVisit, HIVSTITestResult, HTCCounselling,
     IndividualCounselling, GroupEducationSession, OutreachSession,
     GBVCase, Referral, ServiceCenter, TrainingEvent, CoordMeeting, MobileHealthCamp,
     IECMaterial, WellnessLogbookEntry,
@@ -27,28 +27,30 @@ APPROVED = 'APPROVED'
 
 
 def compute_I_BND_1_1(org, period_start, period_end):
-    """KP individuals reached — the Mother List registry. Target: 4,000.
+    """KP individuals reached — distinct beneficiaries served in the Beneficiary
+    Service Log. Target: 4,000.
 
-    Rafi's M&E decision (2026-07-01): 'KP reached' is measured by the Mother
-    List (F-1.1 registration) — the register of KP individuals the programme has
-    enrolled — NOT the F-05/F-06 service sub-counts. HIV/STI/HTC service delivery
-    is tracked separately by 1.5a (STI services) and 1.5b (HIV testing), so this
-    no longer double-reads those forms.
-
-    Counts registered, APPROVED, non-stub Bandhu clients by registration date
-    (Client.created_at). Cumulative = the whole registry; monthly = new
-    registrations that month. Registration is auto-approved for Bandhu, so the
-    number reflects the live Mother List (stubs — name ''/'Unknown' created by a
-    service log citing an unregistered ID — are excluded, mirroring the client
-    lookup-CSV exporter)."""
-    return (
-        Client.objects.filter(
-            organisation=org, approval_status=Client.APPROVED,
-            created_at__date__range=(period_start, period_end),
-        )
-        .exclude(name='').exclude(name='Unknown')
-        .values('client_id').distinct().count()
+    Rafi's M&E decision (2026-11-12): 'KP reached' is now measured by the
+    DISTINCT persons appearing in the Beneficiary Service Log
+    (bandhu_service_log_v1), NOT the Mother List registration count. The
+    canonical per-client row the Service Log always writes is the F-01
+    WellnessLogbookEntry (programs/bandhu_handlers.py _bnd_logbook), which stamps
+    each served beneficiary's normalised id. So distinct reached = distinct
+    normalised client id on APPROVED logbook rows in the period, falling back to
+    the raw id where the norm is blank. Cumulative = all distinct served;
+    monthly = distinct served that month. The Mother List registry (Client) is
+    retained but no longer drives 1.1."""
+    qs = _logbook(org, period_start, period_end)
+    norm = set(
+        qs.exclude(client_id_norm__isnull=True).exclude(client_id_norm='')
+        .values_list('client_id_norm', flat=True)
     )
+    raw = set(
+        qs.filter(Q(client_id_norm__isnull=True) | Q(client_id_norm=''))
+        .exclude(client_id='').exclude(client_id__isnull=True)
+        .values_list('client_id', flat=True)
+    )
+    return len(norm | raw)
 
 
 def compute_I_BND_1_2(org, period_start, period_end):
