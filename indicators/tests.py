@@ -537,7 +537,7 @@ class NewComputeFunctionsTest(TestCase):
         self.assertIsNone(row['month_target'])
 
     def test_phd_sl2_1_counts_gbv_referral_yes_records(self):
-        """SL2.1 ('Number of GBV screenings conducted') counts approved Patient
+        """SL2.1 ('Number of GBV Referral') counts approved Patient
         Record visits where GBV REFERRAL is Yes (referral_gbv). Rafi, 2026-11-15:
         this indicator is sourced from the GBV REFERRAL question on the Patient
         Record, not the GBV SCREENING question. This counts RECORDS, not distinct
@@ -584,6 +584,46 @@ class NewComputeFunctionsTest(TestCase):
             referral_reason='GBV', approval_status=Referral.APPROVED)
         self.assertEqual(
             compute_SL2_1('PHD', date(2026, 5, 21), date(2026, 11, 20)), 2)
+
+    def test_phd_sl13_counts_pe_training_participants(self):
+        """SL13 ('Peer educators / community leaders trained') sums
+        total_participants of approved Event Database rows with TYPE OF EVENT =
+        Training (event_type='training') and the Peer Educator participant
+        category (participant_type='PE'). PE participants on a non-training event
+        (e.g. a workshop), a training event with a different participant category,
+        and pending events all do NOT count."""
+        from programs.models import ServiceCenter, TrainingEvent
+        from indicators.phd import compute_SL13
+        from datetime import date
+        centre = ServiceCenter.objects.create(
+            organisation='PHD', name='C-PE', code='PE-1',
+            center_type=ServiceCenter.BROTHEL, district='Khulna')
+        # Two approved PE Training events in the period: 12 + 8 = 20.
+        TrainingEvent.objects.create(
+            organisation='PHD', center=centre, event_date=date(2026, 6, 2),
+            event_type='training', participant_type='PE', topic='PE batch 1',
+            total_participants=12, approval_status='APPROVED')
+        TrainingEvent.objects.create(
+            organisation='PHD', center=centre, event_date=date(2026, 7, 2),
+            event_type='training', participant_type='PE', topic='PE batch 2',
+            total_participants=8, approval_status='APPROVED')
+        # PE participants on a non-training (workshop) event: excluded.
+        TrainingEvent.objects.create(
+            organisation='PHD', center=centre, event_date=date(2026, 6, 3),
+            event_type='workshop', participant_type='PE', topic='PE workshop',
+            total_participants=5, approval_status='APPROVED')
+        # A Training event with a different participant category: excluded.
+        TrainingEvent.objects.create(
+            organisation='PHD', center=centre, event_date=date(2026, 6, 4),
+            event_type='training', participant_type='MW', topic='MW training',
+            total_participants=7, approval_status='APPROVED')
+        # A pending PE Training event: excluded.
+        TrainingEvent.objects.create(
+            organisation='PHD', center=centre, event_date=date(2026, 6, 5),
+            event_type='training', participant_type='PE', topic='PE pending',
+            total_participants=9, approval_status='PENDING')
+        self.assertEqual(
+            compute_SL13('PHD', date(2026, 5, 21), date(2026, 11, 20)), 20)
 
     def test_phd_sl3_sums_group_mh_counselling_count(self):
         """SL3 ('Number of group mental health counselling sessions') sums

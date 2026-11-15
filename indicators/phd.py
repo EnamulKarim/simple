@@ -59,10 +59,11 @@ def compute_SL1(org, period_start, period_end):
     return compute_SL1R(org, period_start, period_end)
 
 
-# ── SL2.1 — GBV screenings conducted ─────────────────────────────────────────
+# ── SL2.1 — Number of GBV Referral ───────────────────────────────────────────
 def compute_SL2_1(org, period_start, period_end):
-    # "Number of GBV screenings conducted" — count of Patient Record visits
-    # where GBV REFERRAL (clinic_ref_gbv -> referral_gbv) is Yes.
+    # "Number of GBV Referral" (renamed 2026-11-15; was "GBV screenings
+    # conducted") — count of Patient Record visits where GBV REFERRAL
+    # (clinic_ref_gbv -> referral_gbv) is Yes.
     # (Rafi, 2026-11-15: this indicator is now sourced from the GBV REFERRAL
     # question on the Patient Record, not the GBV SCREENING question. The GBV
     # referral tick is the record the programme counts as a GBV screening
@@ -339,10 +340,16 @@ def compute_SL12(org, period_start, period_end):
 
 # ── SL13 — Peer educators / community leaders trained ────────────────────────
 def compute_SL13(org, period_start, period_end):
+    # Peer educators / community leaders TRAINED = Event Database rows with
+    # TYPE OF EVENT = Training (event_type='training') and the Peer Educator
+    # participant category (event_participant_type=pe -> participant_type='PE').
+    # (Rafi, 2026-11-15: scope to Training events, matching SL12's pattern; PE
+    # participants logged on a non-training event are not counted as "trained".)
     return TrainingEvent.objects.filter(
         organisation=org,
         approval_status=APPROVED,
         event_date__range=(period_start, period_end),
+        event_type='training',
         participant_type='PE',
     ).aggregate(t=Sum('total_participants'))['t'] or 0
 
@@ -437,7 +444,7 @@ def compute_SL16(org, period_start, period_end):
 ACTIVITY_REGISTRY = {
     'SL1R':  compute_SL1R,          # headline "FSWs reached" = Mother List registry
     'SL1':   compute_SL1,           # now delegates to compute_SL1R (same measure)
-    'SL2.1': compute_SL2_1,         # GBV screenings conducted
+    'SL2.1': compute_SL2_1,         # Number of GBV Referral
     'SL3':   compute_SL3,
     'SL4':   compute_SL4,           # FSWs/clients reached (participant sum)
     'SL4a':  compute_SL4a,          # outreach sessions conducted (session count)
