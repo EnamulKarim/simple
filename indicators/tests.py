@@ -536,13 +536,13 @@ class NewComputeFunctionsTest(TestCase):
         self.assertFalse(row['unlinked'])
         self.assertIsNone(row['month_target'])
 
-    def test_phd_sl2_1_counts_gbv_screening_yes_records(self):
+    def test_phd_sl2_1_counts_gbv_referral_yes_records(self):
         """SL2.1 ('Number of GBV screenings conducted') counts approved Patient
-        Record visits where GBV SCREENING is Yes (gbv_screening_done), per
-        Activity.docx: 'GBV SCREENING = Yes means screening was performed.'
-        This counts RECORDS, not distinct clients — a client screened on two
-        visits contributes two. A Referral-register row no longer has any
-        bearing on this indicator (that was the old, replaced definition)."""
+        Record visits where GBV REFERRAL is Yes (referral_gbv). Rafi, 2026-11-15:
+        this indicator is sourced from the GBV REFERRAL question on the Patient
+        Record, not the GBV SCREENING question. This counts RECORDS, not distinct
+        clients, so a client with a GBV referral on two visits contributes two.
+        The Referral register and the GBV SCREENING tick no longer bear on it."""
         from programs.models import (ServiceCenter, Client, ClinicVisit,
                                       Referral)
         from indicators.phd import compute_SL2_1
@@ -556,25 +556,26 @@ class NewComputeFunctionsTest(TestCase):
         c2 = Client.objects.create(organisation='PHD', center=centre,
                                    client_id='2-0002', name='B',
                                    approval_status=Client.APPROVED)
-        # Two qualifying GBV-screening visits (c1 twice) — both count (records,
+        # Two qualifying GBV-referral visits (c1 twice); both count (records,
         # not distinct clients).
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
                                    visit_date=date(2026, 6, 2),
-                                   gbv_screening_done=True,
+                                   referral_gbv=True,
                                    approval_status=ClinicVisit.APPROVED)
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c1,
                                    visit_date=date(2026, 7, 2),
-                                   gbv_screening_done=True,
+                                   referral_gbv=True,
                                    approval_status=ClinicVisit.APPROVED)
-        # A visit with GBV screening = No must NOT count.
+        # A visit with GBV referral = No must NOT count, even though GBV
+        # screening is Yes (the screening tick no longer drives SL2.1).
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c2,
                                    visit_date=date(2026, 6, 5),
-                                   gbv_screening_done=False,
+                                   referral_gbv=False, gbv_screening_done=True,
                                    approval_status=ClinicVisit.APPROVED)
-        # A pending GBV-screening visit must NOT count.
+        # A pending GBV-referral visit must NOT count.
         ClinicVisit.objects.create(organisation='PHD', center=centre, client=c2,
                                    visit_date=date(2026, 6, 6),
-                                   gbv_screening_done=True,
+                                   referral_gbv=True,
                                    approval_status=ClinicVisit.PENDING)
         # A Referral-register GBV row no longer drives this indicator at all.
         Referral.objects.create(

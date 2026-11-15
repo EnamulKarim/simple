@@ -62,19 +62,19 @@ def compute_SL1(org, period_start, period_end):
 # ── SL2.1 — GBV screenings conducted ─────────────────────────────────────────
 def compute_SL2_1(org, period_start, period_end):
     # "Number of GBV screenings conducted" — count of Patient Record visits
-    # where GBV SCREENING (clinic_gbv_screen -> gbv_screening_done) is Yes.
-    # Per Activity.docx: "GBV SCREENING = Yes means screening was performed."
-    # A qualifying record counts, not a distinct-client count (mirrors SL5f-i).
-    # Replaces the old "identified and referred" definition, which read the
-    # Referral register instead (a different activity: SL2.2 "cases mitigated"
-    # was the referral/outcome half of that pair — Activity.docx asks for it to
-    # be omitted entirely, so that Referral-register logic is not carried
-    # forward here).
+    # where GBV REFERRAL (clinic_ref_gbv -> referral_gbv) is Yes.
+    # (Rafi, 2026-11-15: this indicator is now sourced from the GBV REFERRAL
+    # question on the Patient Record, not the GBV SCREENING question. The GBV
+    # referral tick is the record the programme counts as a GBV screening
+    # conducted.) A qualifying record counts, not a distinct-client count
+    # (mirrors SL5f-i). The clinic_ref_gbv field is already ingested onto
+    # ClinicVisit.referral_gbv by phd_handlers._phd_clinic, so no form or
+    # handler change is needed.
     return ClinicVisit.objects.filter(
         organisation=org,
         approval_status=APPROVED,
         visit_date__range=(period_start, period_end),
-        gbv_screening_done=True,
+        referral_gbv=True,
     ).count()
 
 
