@@ -40,7 +40,12 @@ def build_payload(server_url, username, password, project_name, project_icon,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--server', default='https://kf.kobotoolbox.org')
+    # KoboCollect talks OpenRosa (/formList + /submission), which lives on the
+    # kobocat host kc.kobotoolbox.org — NOT kf. As of ~11 Nov 2026 the kf host
+    # returns 404 on both OpenRosa endpoints (kc returns 204), so a QR baked with
+    # kf leaves every phone unable to download forms or submit. The dashboard's
+    # REST/API work still uses kf.kobotoolbox.org/api/v2 — that is unaffected.
+    ap.add_argument('--server', default='https://kc.kobotoolbox.org')
     ap.add_argument('--username', required=True)
     ap.add_argument('--password', default='')
     ap.add_argument('--project-name', default='CIPRB')
