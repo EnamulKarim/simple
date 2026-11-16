@@ -531,13 +531,19 @@ export function OrgDashboard({ partner }: Props) {
             sees its 22-indicator average at a glance. */}
         <CumulativeAverageTile
           org={partner}
-          periodStart="2026-05-21"
+          periodStart={isPHD ? '2026-04-01' : '2026-05-21'}
           periodEnd="2026-11-20"
         />
         <div className="card shimmer">
+          {/* PHD entered inception-period service/event records dated from
+              1 Apr 2026 (before the 21 May contract start). Count them in the
+              cumulative M&E view so the dashboard matches the Kobo register the
+              PHD PD reconciles against. Backend default is already 1 Apr; this
+              explicit param kept the cards on the narrow window until now.
+              Bandhu/CIPRB have no pre-21-May rows, so they keep the 21 May label. */}
           <IndicatorGrid
             org={partner}
-            periodStart="2026-05-21"
+            periodStart={isPHD ? '2026-04-01' : '2026-05-21'}
             periodEnd="2026-11-20"
           />
         </div>

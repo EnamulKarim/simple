@@ -268,8 +268,11 @@ export default function Infographics() {
   const [partnerFilter, setPartnerFilter] = useState<'all' | PartnerCode>('all')
 
   useEffect(() => {
+    // 1 Apr start so PHD inception-period records (dated before the 21 May
+    // contract start) are included, matching the org dashboard and the Kobo
+    // register. Only PHD has pre-21-May rows, so Bandhu/CIPRB are unchanged.
     api.get<(IndicatorProgress & { organisation: PartnerCode })[]>(
-      '/indicators/progress/?period_start=2026-05-21&period_end=2026-11-20'
+      '/indicators/progress/?period_start=2026-04-01&period_end=2026-11-20'
     )
       .then((r) => setRows(r.data))
       .finally(() => setLoading(false))
