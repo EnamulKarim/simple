@@ -221,38 +221,27 @@ def compute_SL5i(org, period_start, period_end):   # HIV screenings performed
     return _screenings_done(org, period_start, period_end, SL5_SCREEN_FIELD['SL5i'])
 
 
-# ── SL6 — HIV/STI positive cases referred and enrolled in treatment ──────────
-# Fragments that mark a Referral-register row as a POSITIVE HIV/STI case being
-# sent on for treatment. Taken from the ACTUAL referral_reason values staff type
-# in production (read 2026-11-10), not guessed:
-#   'Syphilis positive' / 'Syphilis Positive'      -> 'positive'
-#   'TPHA(+ve)' 'TPHA (+)' 'TPHA(+)ve' 'TPHA +ve'
-#   'TPHA (+ve)' 'TPHA(+ ve)' 'TPHA+ ve'           -> 'tpha'
-#   'HBsAg +ve' / 'HbsAg + tive'                   -> 'hbsag'
-#   'Hepatitis B positive'                         -> 'positive'
-#   'STI treatment'                                -> 'sti treatment'
-# TPHA is the syphilis confirmatory test and is only recorded for positives, so
-# the bare 'tpha' fragment is safe. Plain 'STI' / 'VIA' / 'General health'
-# referrals are NOT positives and are deliberately excluded.
-_SL6_POSITIVE_FRAGMENTS = (
-    'tpha', 'positive', '+ve', '+ ve', '(+)', 'hbsag', 'sti treatment',
-)
-
-
+# ── SL6 — Number of STI Referral ─────────────────────────────────────────────
 def compute_SL6(org, period_start, period_end):
-    # "HIV/STI positive cases successfully referred and enrolled in treatment."
-    # Sourced from the REFERRAL REGISTER ONLY, per the client Indicators->Kobo
-    # map (SL6 -> Referral). The forms capture no separate "enrolled"
-    # confirmation, so the recorded referral of a positive case is the
-    # measurable step. Count distinct clients.
-    reason_q = Q()
-    for frag in _SL6_POSITIVE_FRAGMENTS:
-        reason_q |= Q(referral_reason__icontains=frag)
-    return Referral.objects.filter(
+    # "Number of STI Referral" (renamed/redefined 2026-11-15; was "Referral
+    # support for HIV, Syphilis, Hepatitis B & C", read from the free-text
+    # Referral Register as distinct positive clients). Rafi: all STI /
+    # bloodborne referrals on the Patient Record (form o7GhleIk) go under one
+    # "STI referral" count, read from the form's referral ticks:
+    #   STI-confirmatory test (clinic_ref_sti_confirm -> referral_sti_kp),
+    #       which covers the HIV / syphilis / hep B / hep C confirmatory
+    #       referrals, and
+    #   STI-non-responsive / complicated
+    #       (clinic_ref_sti_nonres -> referral_hiv_testing).
+    # STI-Partner is a separate referral and is NOT included. Count qualifying
+    # records (not distinct clients), mirroring SL2.1.
+    return ClinicVisit.objects.filter(
         organisation=org,
         approval_status=APPROVED,
-        referral_date__range=(period_start, period_end),
-    ).filter(reason_q).values('client_id').distinct().count()
+        visit_date__range=(period_start, period_end),
+    ).filter(
+        Q(referral_sti_kp=True) | Q(referral_hiv_testing=True)
+    ).count()
 
 
 # ── SL7 — GBV survivors referred for MHPSS ───────────────────────────────────
