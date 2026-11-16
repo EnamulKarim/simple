@@ -33,7 +33,13 @@ from .service import get_partner_indicator_progress, get_indicator_progress
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PERIOD_START = date(2026, 5, 21)
+# Cumulative window start. The programme contract runs 21 May to 20 Nov 2026,
+# but PHD entered inception-period service and event records dated from 1 April
+# 2026 (earliest real record). To count that pre-contract activity in the
+# cumulative view, the default start is set to the earliest record date rather
+# than the contract start. Monthly views are unaffected (they use the calendar
+# month). Callers may still pass an explicit period_start to narrow the window.
+DEFAULT_PERIOD_START = date(2026, 4, 1)
 DEFAULT_PERIOD_END   = date(2026, 11, 20)
 
 
