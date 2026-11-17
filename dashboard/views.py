@@ -52,9 +52,17 @@ def _partner_programs_counts(partner, month_start, month_end):
     from django.apps import apps
     this_month = pending = 0
     triple = {'organisation', 'created_at', 'approval_status'}
+    # KoboWithdrawal is an audit tombstone for records DELETED in KoboToolbox,
+    # not a live submission. It carries approval_status (a snapshot of the state
+    # the record held when removed), so the field-triple heuristic wrongly swept
+    # it into the pending banner and the this-month approved count. Exclude it
+    # (and any future non-submission audit model) explicitly. (e93c6e1; lost in
+    # 24f2fc0's stale-file overwrite, restored 2026-11-17.)
+    NON_SUBMISSION = {'KoboWithdrawal', 'KoboSyncRun'}
     models = [
         m for m in apps.get_app_config('programs').get_models()
         if triple <= {f.name for f in m._meta.get_fields()}
+        and m.__name__ not in NON_SUBMISSION
     ]
     if partner == 'CIPRB':
         for _al, _mn in (
