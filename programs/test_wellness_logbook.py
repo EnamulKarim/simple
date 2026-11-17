@@ -93,7 +93,18 @@ class WellnessLogbookTest(TestCase):
         self.assertEqual(bnd.compute_I_BND_1_5_sti('Bandhu', p0, p1), 1)
         self.assertEqual(bnd.compute_I_BND_1_2('Bandhu', p0, p1), 1)
         self.assertEqual(bnd.compute_I_BND_1_3('Bandhu', p0, p1), 1)
-        self.assertEqual(bnd.compute_I_BND_4_1('Bandhu', p0, p1), 4)
+        # 4.1 IEC is NOT read from the logbook (Rafi 2026-11-12): the per-person
+        # iec is stored but only the Activity report's iec_sbcc_distributed
+        # tally is summed, so the two sources are never double-counted.
+        self.assertEqual(e.iec, 4)
+        self.assertEqual(bnd.compute_I_BND_4_1('Bandhu', p0, p1), 0)
+        from programs.models import BandhuActivityReport
+        BandhuActivityReport.objects.create(
+            organisation='Bandhu', center=self.center,
+            report_date=date(2026, 6, 30), iec_sbcc_distributed=7,
+            approval_status=BandhuActivityReport.APPROVED,
+        )
+        self.assertEqual(bnd.compute_I_BND_4_1('Bandhu', p0, p1), 7)  # not 11
 
     def test_specific_model_row_does_not_double_the_logbook(self):
         # Single-source guard: a stray/legacy GBVCase in the same period must NOT

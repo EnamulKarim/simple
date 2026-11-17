@@ -64,24 +64,28 @@ class ManualIdTests(TestCase):
 
 
 def _row(name):
-    """A survey row by field name. _sr returns a fixed-position list:
-    [qtype, name, en, bn, hint, required, relevant, constraint, cmsg, ...]."""
+    """A survey row by field name, keyed by its XLSForm column header.
+
+    _sr emits a positional list aligned with SURVEY_HDR. Reading by header, not
+    by index, keeps these tests valid when columns are added (3fbe7bc split
+    hint/constraint_message into ::English/::Bangla and shifted every index)."""
     from programs.management.commands.build_bandhu_forms import (
-        _mother_list_survey)
-    return next(r for r in _mother_list_survey() if len(r) > 1 and r[1] == name)
+        SURVEY_HDR, _mother_list_survey)
+    row = next(r for r in _mother_list_survey() if len(r) > 1 and r[1] == name)
+    return dict(zip(SURVEY_HDR, row))
 
 
 class PrefixConstraintTests(TestCase):
     """The wrong-centre prefix is blocked in the form, before it is sent."""
 
     def test_form_requires_the_centre_prefix(self):
-        row = _row('ml_existing_id')
-        constraint = row[7]
+        constraint = _row('ml_existing_id')['constraint']
         self.assertIn('starts-with', constraint)
         self.assertIn('centre_district_code', constraint)
         self.assertIn('^[0-9]{2}-[0-9]{4}$', constraint)
 
     def test_the_field_is_labelled_for_everyday_use(self):
         row = _row('ml_existing_id')
-        self.assertEqual(row[2], 'Beneficiary ID')
-        self.assertNotIn('only if she is', ' '.join(str(x) for x in row))
+        self.assertEqual(row['label::English'], 'Beneficiary ID')
+        self.assertNotIn('only if she is',
+                         ' '.join(str(x) for x in row.values()))

@@ -448,11 +448,26 @@ class KoboFormMappingWiringTest(TestCase):
 
 # ─── New compute functions (Commit 2 IEC + day-observance) ───────────────────
 
+def _bandhu_centre(code):
+    from programs.models import ServiceCenter
+    return ServiceCenter.objects.create(
+        organisation='Bandhu', name='C-' + code, code=code,
+        center_type=ServiceCenter.DIC, district='Dhaka')
+
+
+def _bandhu_activity_report(centre, report_date, status='APPROVED', **tallies):
+    """One live Activity & Operations aggregate report (bandhu_activity_ops_v1)."""
+    from programs.models import BandhuActivityReport
+    return BandhuActivityReport.objects.create(
+        organisation='Bandhu', center=centre, report_date=report_date,
+        approval_status=status, **tallies)
+
+
 class NewComputeFunctionsTest(TestCase):
-    """The IEC + day-observance compute functions (Bandhu 2.6 day observance,
-    Bandhu 4.2 displays, PHD SL15a message boards) exercised with minimal
-    fixtures: assert non-crash + correct count from the IECMaterial and
-    CoordMeeting (DAY_OBSERVANCE) backings."""
+    """Bandhu 1.1 / 2.6 / 4.2 and PHD SL15a/b, SL16 exercised with minimal
+    fixtures. Bandhu definitions follow Rafi's 2026-11-12 M&E decision in
+    indicators/bandhu.py: 1.1 = distinct persons in APPROVED F-01 logbook rows;
+    2.6 and 4.2 = SUM of the Activity report tally over APPROVED reports."""
 
     def setUp(self):
         from programs.models import ServiceCenter
@@ -461,34 +476,34 @@ class NewComputeFunctionsTest(TestCase):
             center_type=ServiceCenter.BROTHEL, district='Dhaka',
         )
 
-    def test_bnd_1_1_counts_mother_list_not_service_forms(self):
-        """KP reached (1.1) is the Mother List registry, not F-05/F-06 services.
-        Registered (approved, named) Bandhu clients count; stubs and service
-        ClinicVisits do not."""
-        from programs.models import ServiceCenter, Client, ClinicVisit
+    def test_bnd_1_1_counts_distinct_logbook_persons_not_mother_list(self):
+        """KP reached (1.1) = distinct persons served in APPROVED F-01 logbook
+        rows in the period. A Mother List registration alone does not count; a
+        returning person counts once; PENDING, MANAGER_APPROVED and
+        out-of-period rows do not count; the raw id is the fallback when the
+        normalised id is blank."""
+        from programs.models import Client, WellnessLogbookEntry as W
         from indicators.bandhu import compute_I_BND_1_1
         from datetime import date
-        centre = ServiceCenter.objects.create(
-            organisation='Bandhu', name='C-ML', code='ML-1',
-            center_type=ServiceCenter.DIC, district='Dhaka')
-        # Two real Mother List registrations (auto-approved, named).
-        c1 = Client.objects.create(organisation='Bandhu', center=centre,
-                                   client_id='ML-01', name='Asha',
-                                   approval_status=Client.APPROVED)
+        centre = _bandhu_centre('ML-1')
+        # Registered on the Mother List but never served — must NOT count.
         Client.objects.create(organisation='Bandhu', center=centre,
-                              client_id='ML-02', name='Rani',
+                              client_id='09-0099', name='Asha',
                               approval_status=Client.APPROVED)
-        # A stub (service log cited an unregistered id) — must NOT count.
-        Client.objects.create(organisation='Bandhu', center=centre,
-                              client_id='ML-STUB', name='Unknown',
-                              approval_status=Client.APPROVED)
-        # A service record — must NOT drive KP-reached any more.
-        ClinicVisit.objects.create(organisation='Bandhu', center=centre,
-                                   client=c1, visit_date=date(2026, 6, 2),
-                                   hiv_screening_done=True,
-                                   approval_status=ClinicVisit.APPROVED)
+
+        def log(cid, norm, day, status=W.APPROVED):
+            W.objects.create(organisation='Bandhu', center=centre,
+                             client_id=cid, client_id_norm=norm,
+                             service_date=day, approval_status=status)
+
+        log('0001', '09-0001', date(2026, 6, 2))      # person 1
+        log('09-0001', '09-0001', date(2026, 7, 2))   # person 1 returns
+        log('09-0002', '', date(2026, 6, 3))          # person 2, raw-id fallback
+        log('09-0003', '09-0003', date(2026, 6, 4), W.PENDING)
+        log('09-0004', '09-0004', date(2026, 6, 5), W.MANAGER_APPROVED)
+        log('09-0005', '09-0005', date(2026, 12, 1))  # outside period
         n = compute_I_BND_1_1('Bandhu', date(2026, 5, 21), date(2026, 11, 20))
-        self.assertEqual(n, 2)   # the two named registrations only
+        self.assertEqual(n, 2)
 
     def test_phd_sl1_matches_sl1r_mother_list_registry(self):
         """PHD 'FSWs reached' (SL1R headline) and SL1 (the lower SIDA-framework
@@ -895,10 +910,23 @@ class NewComputeFunctionsTest(TestCase):
         self.assertEqual(compute_SL16('PHD', *FULL), 50)     # real value wins
         self.assertEqual(compute_SL16('PHD', *JUNE), 50)     # same month, no floor needed anyway
 
-    def test_bandhu_2_6_counts_day_observance(self):
+    def test_bandhu_2_6_sums_activity_report_observance_events(self):
+        """2.6 = SUM of observance_event_count over APPROVED Activity reports in
+        the period. Other tallies on the same report, unapproved reports, and
+        the superseded CoordMeeting(DAY_OBSERVANCE) source do not count."""
         from programs.models import CoordMeeting
         from indicators.bandhu import compute_I_BND_2_6
         from datetime import date
+        centre = _bandhu_centre('OBS-1')
+        _bandhu_activity_report(centre, date(2026, 6, 1),
+                                observance_event_count=2, gov_ngo_meetings=5)
+        _bandhu_activity_report(centre, date(2026, 7, 1), observance_event_count=1)
+        _bandhu_activity_report(centre, date(2026, 7, 2), 'PENDING',
+                                observance_event_count=10)
+        _bandhu_activity_report(centre, date(2026, 7, 3), 'MANAGER_APPROVED',
+                                observance_event_count=10)
+        _bandhu_activity_report(centre, date(2026, 12, 1),  # outside period
+                                observance_event_count=10)
         CoordMeeting.objects.create(
             organisation='Bandhu',
             meeting_date=date(2026, 6, 1),
@@ -906,41 +934,30 @@ class NewComputeFunctionsTest(TestCase):
             meeting_notes='dummy.pdf',  # blank=False on the field
             approval_status=CoordMeeting.APPROVED,
         )
-        CoordMeeting.objects.create(
-            organisation='Bandhu',
-            meeting_date=date(2026, 6, 2),
-            meeting_type=CoordMeeting.GOB,  # different type
-            meeting_notes='dummy.pdf',
-            approval_status=CoordMeeting.APPROVED,
-        )
         result = compute_I_BND_2_6('Bandhu', date(2026, 5, 21), date(2026, 11, 20))
-        self.assertEqual(result, 1)
+        self.assertEqual(result, 3)
 
-    def test_bandhu_4_2_counts_displays(self):
-        # Bandhu 4.2 "public messaging displays" sums BILLBOARD + DIGITAL
-        # IEC-material quantity (printed + e-billboards); other types excluded.
+    def test_bandhu_4_2_sums_activity_report_displays(self):
+        """4.2 = SUM of messaging_displays_installed over APPROVED Activity
+        reports. The IEC tally on the same report, unapproved reports, and the
+        superseded IECMaterial BILLBOARD/DIGITAL rows do not count."""
         from programs.models import IECMaterial
         from partners.models import Partner
         from indicators.bandhu import compute_I_BND_4_2
         from datetime import date
-        partner = Partner.objects.get(code='Bandhu')
+        centre = _bandhu_centre('DSP-1')
+        _bandhu_activity_report(centre, date(2026, 6, 1),
+                                messaging_displays_installed=2,
+                                iec_sbcc_distributed=99)
+        _bandhu_activity_report(centre, date(2026, 7, 1),
+                                messaging_displays_installed=1)
+        _bandhu_activity_report(centre, date(2026, 7, 2), 'PENDING',
+                                messaging_displays_installed=5)
         IECMaterial.objects.create(
-            partner=partner, organisation='Bandhu',
-            material_type=IECMaterial.DIGITAL,
-            quantity=1, date_distributed=date(2026, 6, 1),
-            approval_status=IECMaterial.APPROVED,
-        )
-        IECMaterial.objects.create(
-            partner=partner, organisation='Bandhu',
+            partner=Partner.objects.get(code='Bandhu'), organisation='Bandhu',
             material_type=IECMaterial.BILLBOARD,
-            quantity=1, date_distributed=date(2026, 7, 1),
-            approval_status=IECMaterial.APPROVED,
-        )
-        IECMaterial.objects.create(
-            partner=partner, organisation='Bandhu',
-            material_type=IECMaterial.POSTER,   # excluded type
-            quantity=99, date_distributed=date(2026, 7, 1),
+            quantity=7, date_distributed=date(2026, 7, 1),
             approval_status=IECMaterial.APPROVED,
         )
         result = compute_I_BND_4_2('Bandhu', date(2026, 5, 21), date(2026, 11, 20))
-        self.assertEqual(result, 2)  # sum of BILLBOARD + DIGITAL quantity
+        self.assertEqual(result, 3)
