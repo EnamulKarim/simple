@@ -3,7 +3,7 @@ Bandhu (SOGIEC) indicator compute functions.
 All filter on approval_status='APPROVED' only.
 Period args: period_start, period_end are date objects.
 """
-from django.db.models import Q, Sum
+from django.db.models import Sum
 from programs.models import (
     Referral, WellnessLogbookEntry, BandhuActivityReport,
 )
@@ -33,6 +33,21 @@ def _rsum(org, period_start, period_end, field):
     ).aggregate(t=Sum(field))['t'] or 0
 
 
+def _distinct_persons(qs):
+    """Count DISTINCT beneficiaries in a logbook queryset, never visits.
+
+    A person is their normalised DD-NNNN id, falling back to the raw id when the
+    norm is blank (ids compared trimmed + upper-cased). Rafi 2026-11-17: no
+    person may be counted twice in any Bandhu person indicator; repeat visits
+    and duplicate submissions of the same visit collapse to one person."""
+    ids = set()
+    for norm, raw in qs.values_list('client_id_norm', 'client_id'):
+        pid = (norm or raw or '').strip().upper()
+        if pid:
+            ids.add(pid)
+    return len(ids)
+
+
 def compute_I_BND_1_1(org, period_start, period_end):
     """KP individuals reached — distinct beneficiaries served in the Beneficiary
     Service Log. Target: 4,000.
@@ -47,27 +62,18 @@ def compute_I_BND_1_1(org, period_start, period_end):
     the raw id where the norm is blank. Cumulative = all distinct served;
     monthly = distinct served that month. The Mother List registry (Client) is
     retained but no longer drives 1.1."""
-    qs = _logbook(org, period_start, period_end)
-    norm = set(
-        qs.exclude(client_id_norm__isnull=True).exclude(client_id_norm='')
-        .values_list('client_id_norm', flat=True)
-    )
-    raw = set(
-        qs.filter(Q(client_id_norm__isnull=True) | Q(client_id_norm=''))
-        .exclude(client_id='').exclude(client_id__isnull=True)
-        .values_list('client_id', flat=True)
-    )
-    return len(norm | raw)
+    return _distinct_persons(_logbook(org, period_start, period_end))
 
 
 def compute_I_BND_1_2(org, period_start, period_end):
-    """GBV survivors screened and referred. Target: 120 (MIS doc).
+    """GBV survivors screened and referred. Target: 120 survivors (MIS doc).
 
     SINGLE SOURCE — the F-01 logbook gbv tick. Bandhu records GBV only in the
     logbook (the F-02 record type is removed from the Bandhu Service Log), so the
     logbook is counted alone — never summed with GBVCase — to guarantee no
-    double-count if a stray/legacy F-02 row ever coexists."""
-    return _logbook(org, period_start, period_end).filter(gbv=True).count()
+    double-count if a stray/legacy F-02 row ever coexists. Counts DISTINCT
+    persons (2026-11-17), not visits."""
+    return _distinct_persons(_logbook(org, period_start, period_end).filter(gbv=True))
 
 
 def compute_I_BND_1_3(org, period_start, period_end):
@@ -80,7 +86,8 @@ def compute_I_BND_1_3(org, period_start, period_end):
     group-ed row ever landed under org=Bandhu, so it is removed."""
     # SINGLE SOURCE — the F-01 logbook mental_health tick (F-03 record type is
     # removed from the Bandhu Service Log), counted alone to avoid any double-count.
-    return _logbook(org, period_start, period_end).filter(mental_health=True).count()
+    # DISTINCT persons (2026-11-17): target unit is persons, not sessions.
+    return _distinct_persons(_logbook(org, period_start, period_end).filter(mental_health=True))
 
 
 def compute_I_BND_1_4A(org, period_start, period_end):
@@ -105,7 +112,9 @@ def compute_I_BND_1_5_hiv(org, period_start, period_end):
     filter without their sign-off."""
     # SINGLE SOURCE — the F-01 logbook htc tick (F-06 record type is removed from
     # the Bandhu Service Log), counted alone to avoid any double-count.
-    return _logbook(org, period_start, period_end).filter(htc=True).count()
+    # DISTINCT persons (Rafi 2026-11-17): "KP receiving HIV testing" counts
+    # people; a person tested on two visits is one KP, not two.
+    return _distinct_persons(_logbook(org, period_start, period_end).filter(htc=True))
 
 
 def compute_I_BND_1_5_sti(org, period_start, period_end):
@@ -118,7 +127,9 @@ def compute_I_BND_1_5_sti(org, period_start, period_end):
     STI-case/treatment fields without their sign-off."""
     # SINGLE SOURCE — the F-01 logbook sti_screening tick (F-05 record type is
     # removed from the Bandhu Service Log), counted alone to avoid any double-count.
-    return _logbook(org, period_start, period_end).filter(sti_screening=True).count()
+    # DISTINCT persons (Rafi 2026-11-17): "KP receiving STI services" counts
+    # people; repeat visits by the same person collapse to one.
+    return _distinct_persons(_logbook(org, period_start, period_end).filter(sti_screening=True))
 
 
 def compute_I_BND_1_6(org, period_start, period_end):

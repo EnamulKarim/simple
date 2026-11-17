@@ -297,7 +297,13 @@ def collect_bandhu(ps: date, pe: date) -> dict:
     registry = Client.objects.filter(organisation='Bandhu', approval_status=APPROVED) \
                              .exclude(name='').exclude(name='Unknown').count()
 
-    members = lb.exclude(client_id_norm='').values('client_id_norm').distinct().count()
+    # Person counts reuse the indicator helper so the report never counts a
+    # person twice (Rafi 2026-11-17). The "Services recorded" block below stays
+    # a VISIT/service-event volume and is labelled as such.
+    from indicators.bandhu import _distinct_persons
+    members = _distinct_persons(lb)
+    people_htc = _distinct_persons(lb.filter(htc=True))
+    people_sti = _distinct_persons(lb.filter(sti_screening=True))
 
     geo_rows = []
     try:
@@ -320,14 +326,14 @@ def collect_bandhu(ps: date, pe: date) -> dict:
         'kpis': [
             _row('New members registered', 'নতুন সদস্য নিবন্ধন', new_reg),
             _row('Members served', 'সেবা পাওয়া সদস্য', members),
-            _row('HIV testing (HTC)', 'এইচআইভি পরীক্ষা', flags['htc'] or 0),
-            _row('STI screening', 'এসটিআই স্ক্রিনিং', flags['sti'] or 0),
+            _row('People tested for HIV', 'এইচআইভি পরীক্ষা করা ব্যক্তি', people_htc),
+            _row('People screened for STI', 'এসটিআই স্ক্রিনিং করা ব্যক্তি', people_sti),
             _row('Condoms distributed', 'কনডম বিতরণ', flags['condom'] or 0),
             _row('Registry to date', 'মোট নিবন্ধিত', registry),
         ],
         'blocks': [
-            {'en': 'Services recorded in the F-01 logbook',
-             'bn': 'F-01 লগবুকে নথিভুক্ত সেবা', 'rows': [
+            {'en': 'Services recorded in the F-01 logbook (visits)',
+             'bn': 'F-01 লগবুকে নথিভুক্ত সেবা (ভিজিট সংখ্যা)', 'rows': [
                 _row('HIV testing & counselling', 'এইচআইভি পরীক্ষা ও কাউন্সেলিং', flags['htc'] or 0),
                 _row('STI screening', 'এসটিআই স্ক্রিনিং', flags['sti'] or 0),
                 _row('Clinical care', 'চিকিৎসা সেবা', flags['clinical'] or 0),
