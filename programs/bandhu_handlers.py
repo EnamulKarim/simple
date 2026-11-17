@@ -268,9 +268,50 @@ def _norm_client_id(raw, center):
     return f'{dd}-{raw}'
 
 
+def _is_person_service_log(payload):
+    """True for the live grouped person-based Beneficiary Service Log (namespaced
+    fields, no record_type). Single source for the router AND the backfill."""
+    return payload.get('beneficiary/person') is not None or any(
+        k.startswith('submission_info/') or k.startswith('sti_service/')
+        for k in payload)
+
+
+def _person_service_fields(payload):
+    """Map the live grouped Service Log blocks → WellnessLogbookEntry flag/count
+    columns. Used by _bnd_person_log at ingest AND by the backfill (via
+    _log_service_fields), so a re-run reproduces exactly what ingest wrote."""
+    g = payload.get
+    yn = lambda k: _str(g(k)).lower() == 'yes'
+    n = lambda k: max(0, _int_or_none(g(k)) or 0)
+    return dict(
+        tg_code=_str(g('beneficiary/selected_tg'))[:50],
+        sti_screening=yn('sti_service/sti_screening_done'),
+        htc=yn('hiv_test/hiv_test_done'),
+        clinical=yn('other_services/clinical_services'),
+        gbv=yn('gbv_support/gbv_support_given'),
+        mental_health=yn('mental_health/mhpss_counseling_given'),
+        counseling=yn('other_services/general_counseling'),
+        legal=yn('other_services/legal_support'),
+        recreation=yn('other_services/recreation'),
+        group_edu=yn('other_services/group_education'),
+        referral_codes=' '.join(_multi(payload, 'referral/referred_for')),
+        condom=n('commodities/condoms'), condom_demo=n('commodities/condom_demos'),
+        lubricant=n('commodities/lubricants'),
+        awareness=n('commodities/awareness_sessions'),
+        iec=n('commodities/iec_materials'),
+    )
+
+
 def _log_service_fields(payload):
-    """Map the F-01 services block → WellnessLogbookEntry flag/count columns.
-    Shared by the live handler and the backfill command."""
+    """Map an F-01 payload → WellnessLogbookEntry flag/count columns, for EITHER
+    form shape. Shared by the live handlers and the backfill command.
+
+    The grouped person form must be read with its namespaced keys: reading it
+    with the legacy flat log_* keys returns all-False/0, and because the backfill
+    runs with --commit on every boot, that silently wiped every live row's
+    services on each deploy (found 2026-11-17: 363 payload=yes/column=False)."""
+    if _is_person_service_log(payload):
+        return _person_service_fields(payload)
     yn = lambda k: _str(payload.get(k)).lower() == 'yes'
     # Counts are PositiveIntegerField — clamp to >=0 (some legacy rows carry a
     # stray negative that violates the DB check constraint).
@@ -399,28 +440,13 @@ def _bnd_person_log(payload, lat, lng):
         return HttpResponse('OK', status=200)
     g = payload.get
     yn = lambda k: _str(g(k)).lower() == 'yes'
-    n = lambda k: max(0, _int_or_none(g(k)) or 0)
     raw_id = _str(g('beneficiary/person'))
     norm_id = _norm_client_id(raw_id, center)
     WellnessLogbookEntry.objects.create(
         organisation=ORG, center=center,
         service_date=_date(g('submission_info/service_date')) or _sub_date(payload),
         client_id=raw_id, client_id_norm=norm_id,
-        tg_code=_str(g('beneficiary/selected_tg'))[:50],
-        sti_screening=yn('sti_service/sti_screening_done'),
-        htc=yn('hiv_test/hiv_test_done'),
-        clinical=yn('other_services/clinical_services'),
-        gbv=yn('gbv_support/gbv_support_given'),
-        mental_health=yn('mental_health/mhpss_counseling_given'),
-        counseling=yn('other_services/general_counseling'),
-        legal=yn('other_services/legal_support'),
-        recreation=yn('other_services/recreation'),
-        group_edu=yn('other_services/group_education'),
-        referral_codes=' '.join(_multi(payload, 'referral/referred_for')),
-        condom=n('commodities/condoms'), condom_demo=n('commodities/condom_demos'),
-        lubricant=n('commodities/lubricants'),
-        awareness=n('commodities/awareness_sessions'),
-        iec=n('commodities/iec_materials'),
+        **_person_service_fields(payload),
         **_base_kwargs(payload, lat, lng),
     )
     # 1.7 — ART linkage completed → Referral(type=art, outcome=completed).
@@ -445,9 +471,7 @@ def _bnd_person_log(payload, lat, lng):
 
 def handle_bandhu_service_log(payload, lat, lng):
     # Live grouped person-based form (no record_type; namespaced fields).
-    if payload.get('beneficiary/person') is not None or any(
-            k.startswith('submission_info/') or k.startswith('sti_service/')
-            for k in payload):
+    if _is_person_service_log(payload):
         return _bnd_person_log(payload, lat, lng)
     # Legacy flat multi-record_type form (kept for back-compat / replay).
     dispatch = {

@@ -176,3 +176,82 @@ class WellnessLogbookTest(TestCase):
         self.assertTrue(e.htc)
         self.assertEqual(e.iec, 2)
         self.assertEqual(e.client_id_norm, '09-0007')
+
+
+# ─── Live grouped person-based Beneficiary Service Log ────────────────────────
+
+PERSON_SERVICES = {
+    'sti_service/sti_screening_done': 'yes',
+    'hiv_test/hiv_test_done': 'yes',
+    'gbv_support/gbv_support_given': 'yes',
+    'mental_health/mhpss_counseling_given': 'yes',
+    'other_services/general_counseling': 'no',
+    'commodities/condoms': '4',
+    'commodities/iec_materials': '6',
+    'referral/referred_for': 'art hiv',
+}
+
+
+def _person(kobo_id='8001', cid='09-0001', services=None):
+    payload = {
+        'submission_info/wellness_centre': '09',   # Dhaka centre code
+        'submission_info/service_date': '2026-10-05',
+        'beneficiary/person': cid,
+        'beneficiary/selected_tg': '05',
+        '_id': kobo_id,
+        '_submitted_by': 'bandhu_field_worker',
+    }
+    payload.update(PERSON_SERVICES if services is None else services)
+    return handle_bandhu_service_log(payload, lat=23.7, lng=90.4)
+
+
+class PersonServiceLogTest(TestCase):
+    """The live form sends namespaced keys. The boot-time backfill must read
+    them too, or every deploy wipes the services (prod incident 2026-11-17)."""
+
+    def setUp(self):
+        cache.clear()
+        self.center = _bandhu_center()
+
+    def _assert_services_intact(self, e):
+        self.assertTrue(e.sti_screening and e.htc and e.gbv and e.mental_health)
+        self.assertFalse(e.counseling)
+        self.assertEqual((e.condom, e.iec, e.tg_code), (4, 6, '05'))
+        self.assertEqual(e.referral_codes, 'art hiv')
+
+    def test_person_form_populates_service_columns(self):
+        self.assertEqual(_person().status_code, 201)
+        self._assert_services_intact(WellnessLogbookEntry.objects.get())
+
+    def test_backfill_does_not_wipe_person_form_services(self):
+        from django.core.management import call_command
+        _person()
+        call_command('backfill_wellness_logbook', '--commit')
+        e = WellnessLogbookEntry.objects.get()
+        self._assert_services_intact(e)
+
+    def test_backfill_restores_wiped_person_form_row(self):
+        # Simulate the prod state after a buggy boot: columns zeroed, payload intact.
+        from django.core.management import call_command
+        _person()
+        e = WellnessLogbookEntry.objects.get()
+        for f in ('sti_screening', 'htc', 'gbv', 'mental_health'):
+            setattr(e, f, False)
+        e.condom = e.iec = 0
+        e.tg_code = e.referral_codes = ''
+        e.save()
+        call_command('backfill_wellness_logbook', '--commit')
+        e.refresh_from_db()
+        self._assert_services_intact(e)
+
+    def test_restored_person_row_counts_once_approved(self):
+        _person()
+        e = WellnessLogbookEntry.objects.get()
+        e.approval_status = WellnessLogbookEntry.APPROVED
+        e.save(update_fields=['approval_status'])
+        p0, p1 = date(2026, 10, 1), date(2026, 10, 31)
+        self.assertEqual(bnd.compute_I_BND_1_1('Bandhu', p0, p1), 1)
+        self.assertEqual(bnd.compute_I_BND_1_5_sti('Bandhu', p0, p1), 1)
+        self.assertEqual(bnd.compute_I_BND_1_5_hiv('Bandhu', p0, p1), 1)
+        self.assertEqual(bnd.compute_I_BND_1_2('Bandhu', p0, p1), 1)
+        self.assertEqual(bnd.compute_I_BND_1_3('Bandhu', p0, p1), 1)
