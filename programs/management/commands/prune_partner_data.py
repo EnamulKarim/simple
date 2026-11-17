@@ -56,7 +56,8 @@ DELETE_ENTIRE_MODELS = {
     'programs.CoordMeeting', 'programs.TrainingEvent', 'programs.StockEntry',
     'programs.TemperatureLog', 'programs.SafetyHygieneKit',
     'programs.StoreRequisition', 'programs.Referral', 'programs.IECMaterial',
-    'programs.NilReport', 'pharmacy.PrescriptionRecord',
+    'programs.NilReport', 'programs.BandhuActivityReport',
+    'pharmacy.PrescriptionRecord',
 }
 # Deleted after the service records above (PROTECT-referenced by them).
 DELETE_AFTER_SERVICES = ['programs.Client']

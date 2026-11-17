@@ -16,7 +16,9 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import User
-from programs.models import ServiceCenter, Client, ClinicVisit
+from programs.models import (
+    ServiceCenter, Client, ClinicVisit, BandhuActivityReport,
+)
 from submissions.models import KoboSubmission
 from mpdsr.ciprb_models import MPDSRDeathNotification
 from baseline.models import BaselineSurvey
@@ -30,6 +32,15 @@ def _seed():
     center_phd = ServiceCenter.objects.create(
         organisation='PHD', name='Dhaka Brothel (PHD)', code='P1',
         center_type=ServiceCenter.BROTHEL, district='Dhaka')
+
+    # Bandhu aggregate Activity report: PROTECT-refs its centre, so it must be
+    # deleted before the non-CIPRB centres are filtered out.
+    center_bandhu = ServiceCenter.objects.create(
+        organisation='Bandhu', name='Bandhu DIC', code='B1',
+        center_type=ServiceCenter.DIC, district='Dhaka')
+    BandhuActivityReport.objects.create(
+        organisation='Bandhu', center=center_bandhu,
+        report_date=date(2026, 6, 1), outreach_sessions=3)
 
     user_ciprb = User.objects.create_user(
         'admin@ciprb.test', 'x', full_name='CIPRB Admin', organisation='CIPRB')
@@ -70,7 +81,7 @@ class PrunePartnerDataTests(TestCase):
         _seed()
         before = {m: m.objects.count() for m in
                   (Client, ClinicVisit, ServiceCenter, User, KoboSubmission,
-                   MPDSRDeathNotification)}
+                   MPDSRDeathNotification, BandhuActivityReport)}
         call_command('prune_partner_data')  # no --apply
         for model, count in before.items():
             self.assertEqual(model.objects.count(), count,
@@ -83,6 +94,7 @@ class PrunePartnerDataTests(TestCase):
         # Partner service-delivery data gone (PROTECT order held, no error).
         self.assertEqual(ClinicVisit.objects.count(), 0)
         self.assertEqual(Client.objects.count(), 0)
+        self.assertEqual(BandhuActivityReport.objects.count(), 0)
 
         # Non-CIPRB centre gone, CIPRB centre kept.
         self.assertEqual(
