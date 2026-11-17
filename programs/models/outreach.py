@@ -150,7 +150,7 @@ class WellnessLogbookEntry(SubmissionBase):
     condom_demo = models.PositiveIntegerField(default=0)
     lubricant = models.PositiveIntegerField(default=0)
     awareness = models.PositiveIntegerField(default=0)
-    iec = models.PositiveIntegerField(default=0)         # → 4.1 IEC distributed
+    iec = models.PositiveIntegerField(default=0)         # stored only; 4.1 sums the Activity report
 
     class Meta:
         ordering = ['-service_date']

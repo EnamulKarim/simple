@@ -17,7 +17,7 @@ def _logbook(org, period_start, period_end):
         organisation=org, approval_status=APPROVED,
         service_date__range=(period_start, period_end),
     )
-from ._centers import active_center_ids
+
 
 ORG = 'Bandhu'
 APPROVED = 'APPROVED'
@@ -208,10 +208,9 @@ def compute_I_BND_4_2(org, period_start, period_end):
 # layer — the row still renders on the org page with achievement=0 and a
 # small "module not built yet" badge, never a crash.
 #
-# Every Bandhu indicator now has a compute function — the previous gaps
-# at 2.6 (day observance) and 4.3 (e-billboards) closed when the
-# DAY_OBSERVANCE meeting type and IECMaterial model landed in Commits 1
-# and 2 respectively.
+# Sources (Rafi 2026-11-12): 1.1-1.3 and 1.5a/b read APPROVED F-01 logbook
+# rows; 1.7 reads Referral; every other code sums a BandhuActivityReport tally
+# over APPROVED reports (_rsum).
 
 ACTIVITY_REGISTRY = {
     '1.1':  compute_I_BND_1_1,
@@ -220,9 +219,9 @@ ACTIVITY_REGISTRY = {
     '1.4a': compute_I_BND_1_4A,
     '1.5a': compute_I_BND_1_5_sti,      # STI services (clinic)
     '1.5b': compute_I_BND_1_5_hiv,      # HIV testing (HTC register)
-    '1.6':  compute_I_BND_1_6,          # functional Dhaka KP clinic (activity-gated)
+    '1.6':  compute_I_BND_1_6,          # Activity report supported_clinics
     '1.7':  compute_I_BND_1_7,
-    '1.8':  compute_I_BND_1_8,          # functional DICs (activity-gated)
+    '1.8':  compute_I_BND_1_8,          # Activity report wellness_centres_improved
     '1.9':  compute_I_BND_1_9,
     '2.1':  compute_I_BND_2_1,
     '2.2':  compute_I_BND_2_2,
@@ -235,4 +234,4 @@ ACTIVITY_REGISTRY = {
 }
 
 # Codes whose compute function takes only (org) — no period args.
-ORG_ONLY_CODES = set()  # 1.6/1.8 are now period-aware (activity-gated functional centres)
+ORG_ONLY_CODES = set()  # every Bandhu code is period-aware
