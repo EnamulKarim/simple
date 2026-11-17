@@ -29,6 +29,7 @@ from django.utils import timezone
 from programs.models import Client
 from programs.management.commands import export_phd_clients as phd
 from programs.management.commands import export_bandhu_clients as bandhu
+from programs.management.commands import export_bandhu_mother_list as bandhu_ml
 from programs.management.commands import export_fistula_clients as fistula
 from fistula.ciprb_models import CIPRBFistulaCase
 
@@ -58,6 +59,31 @@ def _attached_csv(uid, csv_filename, headers):
     return b''
 
 
+def _client_recent(org):
+    def recent(cutoff):
+        return Client.objects.filter(organisation=org, updated_at__gte=cutoff).exists()
+    return recent
+
+
+def _fistula_recent(cutoff):
+    return CIPRBFistulaCase.objects.filter(updated_at__gte=cutoff).exists()
+
+
+def sync_targets():
+    """(export module, label, form uids, csv filename, recent-change check).
+
+    `recent(cutoff)` says whether the CSV's source rows changed since `cutoff`,
+    which catches a dropped *redeploy* (CSV current, Enketo transform stale).
+    PHD/Bandhu source from Client; the CIPRB fistula registry from
+    CIPRBFistulaCase. Both Bandhu CSVs come from the same Bandhu Client rows."""
+    return [
+        (phd,       'PHD',              phd.PHD_FORM_UIDS,       phd.CSV_FILENAME,       _client_recent('PHD')),
+        (bandhu,    'Bandhu',           bandhu.BANDHU_FORM_UIDS, bandhu.CSV_FILENAME,    _client_recent('Bandhu')),
+        (bandhu_ml, 'BandhuMotherList', bandhu_ml.FORM_UIDS,     bandhu_ml.CSV_FILENAME, _client_recent('Bandhu')),
+        (fistula,   'Fistula',          fistula.FISTULA_FORM_UIDS, fistula.CSV_FILENAME, _fistula_recent),
+    ]
+
+
 class Command(BaseCommand):
     help = ('Backstop: re-sync phd_clients.csv / bandhu_clients.csv to the Kobo '
             'forms when drifted or after a recent client change. Safe to run on a '
@@ -71,29 +97,13 @@ class Command(BaseCommand):
         headers = {'Authorization': f'Token {token}'}
         cutoff = timezone.now() - datetime.timedelta(minutes=RECENT_MINUTES)
 
-        # `recent` checks whether the org's source data changed in the last
-        # RECENT_MINUTES — this catches a dropped *redeploy* (CSV current, but
-        # the Enketo transform stale). PHD/Bandhu source from Client; the CIPRB
-        # fistula registry sources from CIPRBFistulaCase, so each org carries
-        # its own recent-change resolver.
-        def _client_recent(o):
-            return Client.objects.filter(
-                organisation=o, updated_at__gte=cutoff).exists()
-
-        def _fistula_recent(_o):
-            return CIPRBFistulaCase.objects.filter(updated_at__gte=cutoff).exists()
-
-        for mod, org, uids, fname, recent_fn in [
-            (phd,    'PHD',    phd.PHD_FORM_UIDS,       phd.CSV_FILENAME,    _client_recent),
-            (bandhu, 'Bandhu', bandhu.BANDHU_FORM_UIDS, bandhu.CSV_FILENAME, _client_recent),
-            (fistula, 'Fistula', fistula.FISTULA_FORM_UIDS, fistula.CSV_FILENAME, _fistula_recent),
-        ]:
+        for mod, org, uids, fname, recent_fn in sync_targets():
             try:
                 csv_bytes, n = mod.build_csv()
                 want = _norm(csv_bytes)
                 drift = any(_norm(_attached_csv(uid, fname, headers)) != want
                             for uid, _label in uids)
-                recent = recent_fn(org)
+                recent = recent_fn(cutoff)
                 if drift or recent:
                     self.stdout.write(
                         f'{org}: re-syncing ({n} clients; drift={drift}, '

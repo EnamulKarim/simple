@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 _ORG_EXPORT = {
     'PHD':    'programs.management.commands.export_phd_clients',
     'Bandhu': 'programs.management.commands.export_bandhu_clients',
+    # mother_list.csv, the person picker on the live Beneficiary Service Log.
+    # Sourced from the same Bandhu Client rows; scheduled alongside 'Bandhu'.
+    'BandhuMotherList': 'programs.management.commands.export_bandhu_mother_list',
     # CIPRB fistula registry — sourced from CIPRBFistulaCase, not Client.
     # Pushed by the _fistula_case_changed receiver below (Client never carries
     # the 'Fistula' org), so it shares the same debounce / daemon machinery.
@@ -167,6 +170,8 @@ def _client_changed(sender, instance: Client, created: bool, **kwargs):
     if org not in _ORG_EXPORT:
         return
     transaction.on_commit(lambda: _schedule_push(org))
+    if org == 'Bandhu':
+        transaction.on_commit(lambda: _schedule_push('BandhuMotherList'))
 
 
 # The CIPRB fistula registry lives in a different model (CIPRBFistulaCase), so

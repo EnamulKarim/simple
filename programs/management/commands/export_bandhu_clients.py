@@ -19,6 +19,7 @@ Without --upload it only writes the CSV locally (dry run).
 import csv
 import datetime
 import io
+import json
 import logging
 import os
 
@@ -32,11 +33,15 @@ logger = logging.getLogger(__name__)
 CSV_FILENAME = 'bandhu_clients.csv'
 KOBO_BASE = 'https://kf.kobotoolbox.org'
 
-# All three Bandhu forms get the CSV.
+# The Mother List forms use bandhu_clients.csv for their duplicate-ID check.
+# The old Service Log (a7PgkrZcH8gMxqsdgkf6fF) and Activity & Operations
+# (a6nEhvxFfDr2xPpcqnYw4f) forms are renamed "STALE - DO NOT USE" on Kobo and
+# are no longer pushed: every push redeployed them for nobody. The live
+# Beneficiary Service Log reads a different file, mother_list.csv, maintained
+# by export_bandhu_mother_list.
 BANDHU_FORM_UIDS = [
     ('ar4muzSPxzhqd9XxVvWXjx', 'Bandhu 0 — Mother List'),
-    ('a7PgkrZcH8gMxqsdgkf6fF', 'Bandhu 1 — Service Log'),
-    ('a6nEhvxFfDr2xPpcqnYw4f', 'Bandhu 2 — Activity & Operations'),
+    ('aUrcU9Adb9rJDgH5BVbiMM', 'Bandhu Mother List'),
 ]
 
 # Unified TG code → label (matches build_bandhu_forms tg_code list).
@@ -96,8 +101,8 @@ def _kobo_token() -> str:
             or os.environ.get('KOBO_TOKEN', '')).strip()
 
 
-def upload_to_kobo(csv_bytes: bytes, stdout) -> bool:
-    """Replace the existing bandhu_clients.csv attachment on every Bandhu form."""
+def upload_media(form_uids, filename: str, csv_bytes: bytes, stdout) -> bool:
+    """Replace the `filename` media attachment on every form in `form_uids`."""
     token = _kobo_token()
     if not token:
         stdout.write('  KOBO_TOKEN not set — skipping upload (dry run).')
@@ -105,24 +110,24 @@ def upload_to_kobo(csv_bytes: bytes, stdout) -> bool:
     headers = {'Authorization': f'Token {token}'}
     api = f'{KOBO_BASE}/api/v2'
     all_ok = True
-    for uid, label in BANDHU_FORM_UIDS:
+    for uid, label in form_uids:
         stdout.write(f'  → {label} ({uid})')
         r = requests.get(f'{api}/assets/{uid}/files/', headers=headers, timeout=30)
         if r.status_code == 200:
             for f in r.json().get('results', []):
                 meta = f.get('metadata', {}) or {}
-                if (f.get('description') == CSV_FILENAME
-                        or meta.get('filename') == CSV_FILENAME):
+                if (f.get('description') == filename
+                        or meta.get('filename') == filename):
                     requests.delete(f'{api}/assets/{uid}/files/{f["uid"]}/',
                                     headers=headers, timeout=30)
-        files = {'content': (CSV_FILENAME, csv_bytes, 'text/csv')}
-        data = {'file_type': 'form_media', 'description': CSV_FILENAME,
-                'metadata': '{"filename": "bandhu_clients.csv"}'}
+        files = {'content': (filename, csv_bytes, 'text/csv')}
+        data = {'file_type': 'form_media', 'description': filename,
+                'metadata': json.dumps({'filename': filename})}
         r = requests.post(f'{api}/assets/{uid}/files/', headers=headers,
                           files=files, data=data, timeout=60)
         if r.status_code not in (200, 201):
             stdout.write(f'     FAILED ({r.status_code}): {r.text[:200]}')
-            logger.error('Bandhu CSV upload failed for %s: %s %s', uid,
+            logger.error('Bandhu %s upload failed for %s: %s %s', filename, uid,
                          r.status_code, r.text[:300])
             all_ok = False
         else:
@@ -130,8 +135,18 @@ def upload_to_kobo(csv_bytes: bytes, stdout) -> bool:
     return all_ok
 
 
+def upload_to_kobo(csv_bytes: bytes, stdout) -> bool:
+    """Replace the bandhu_clients.csv attachment on the Mother List forms."""
+    return upload_media(BANDHU_FORM_UIDS, CSV_FILENAME, csv_bytes, stdout)
+
+
 def redeploy_forms(stdout) -> bool:
-    """Redeploy each Bandhu form so Enketo re-transforms with the fresh CSV.
+    """Redeploy the Mother List forms (see redeploy_assets)."""
+    return redeploy_assets(BANDHU_FORM_UIDS, stdout)
+
+
+def redeploy_assets(form_uids, stdout) -> bool:
+    """Redeploy each form so Enketo re-transforms with the fresh CSV.
     (Enketo inlines the external CSV at deploy time, keyed on the form version,
     so the media swap alone is invisible until a redeploy bumps the version.)"""
     token = _kobo_token()
@@ -140,7 +155,7 @@ def redeploy_forms(stdout) -> bool:
     headers = {'Authorization': f'Token {token}'}
     api = f'{KOBO_BASE}/api/v2'
     all_ok = True
-    for uid, label in BANDHU_FORM_UIDS:
+    for uid, label in form_uids:
         v = requests.get(f'{api}/assets/{uid}/versions/?limit=1',
                          headers=headers, timeout=30)
         try:
