@@ -119,7 +119,10 @@ class FistulaCampaign(models.Model):
     organisation = models.CharField(max_length=20, default='CIPRB', db_index=True)
     district = models.CharField(max_length=100, blank=True)
     upazila = models.CharField(max_length=100, blank=True)
-    union = models.CharField(max_length=100, blank=True)
+    # 500, not 100: the campaign form lets a CHW tick several unions, and the
+    # space-joined codes reached 176 chars, so 18 daily reports (5 Aug 2026)
+    # failed to save on every webhook retry (found 2026-11-17).
+    union = models.CharField(max_length=500, blank=True)
     village = models.CharField(max_length=200, blank=True)
     facility_name = models.CharField(max_length=200, blank=True)
     region = models.CharField(max_length=100, blank=True)
@@ -323,7 +326,7 @@ class FistulaCornerCase(models.Model):
 
     # ─── Address ─────────────────────────────────────────────────────────
     village  = models.CharField(max_length=200, blank=True)
-    union    = models.CharField(max_length=100, blank=True)
+    union    = models.CharField(max_length=500, blank=True)  # multi-select; see FistulaCampaign.union
     upazila  = models.CharField(max_length=100, blank=True)
     district = models.CharField(max_length=100, blank=True, db_index=True)
 
@@ -482,7 +485,7 @@ class FistulaCampaignVisit(models.Model):
 
     # ─── Address ─────────────────────────────────────────────────────────
     village  = models.CharField(max_length=200, blank=True)
-    union    = models.CharField(max_length=100, blank=True)
+    union    = models.CharField(max_length=500, blank=True)  # multi-select; see FistulaCampaign.union
     upazila  = models.CharField(max_length=100, blank=True)
     district = models.CharField(max_length=100, blank=True, db_index=True)
     from_haor = models.BooleanField(null=True, blank=True,

@@ -53,7 +53,8 @@ def _is_live(sub):
 def _counter(slug):
     """A callable returning the current app-row count that `slug` owns."""
     from mpdsr.models import MPDSRCase, MPDSRAction
-    from mpdsr.ciprb_models import MPDSRDeathNotification, MaternalNearMissCase
+    from mpdsr.ciprb_models import (MPDSRDeathNotification, MaternalNearMissCase,
+                                    SurgeryChecklist)
     from fistula.ciprb_models import CIPRBFistulaCase
     from fistula.models import FistulaCampaign
 
@@ -75,6 +76,9 @@ def _counter(slug):
         'ciprb_fistula_questions_v1':        CIPRBFistulaCase.objects.count,
         'ciprb_fistula_campaign_v1':         FistulaCampaign.objects.count,
         'ciprb_mpdsr_response_plan_v1':      MPDSRAction.objects.count,
+        # Was missing, so the hourly guard reported "no handler/counter" and
+        # never checked Safe Surgery for lost submissions (2026-11-17).
+        'ciprb_safe_surgery_v1':             SurgeryChecklist.objects.count,
     }.get(slug)
 
 
@@ -126,6 +130,9 @@ PARTNER_COUNTER_MODELS = [
     'IndividualCounselling', 'MobileHealthCamp', 'OutreachSession',
     'PHDCounsellingReport', 'Referral', 'StockEntry', 'TrainingEvent',
     'WellnessLogbookEntry',
+    # Bandhu Activity & Operations reports (live form since Nov 2026). Missing
+    # until 2026-11-17, so a lost Activity report would have looked healthy.
+    'BandhuActivityReport',
 ]
 
 

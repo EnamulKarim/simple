@@ -101,7 +101,7 @@ class CIPRBFistulaCase(models.Model):
                                     db_index=True)
     district = models.CharField(max_length=100, db_index=True)
     upazila  = models.CharField(max_length=100, blank=True)
-    union    = models.CharField(max_length=100, blank=True)
+    union    = models.CharField(max_length=500, blank=True)  # multi-select; see FistulaCampaign.union
     village  = models.CharField(max_length=100, blank=True)
 
     # ── Patient identity. Direct identifiers are Fernet-encrypted at rest
@@ -112,7 +112,8 @@ class CIPRBFistulaCase(models.Model):
     husband             = EncryptedCharField(blank=True)
     husband_profession  = models.CharField(max_length=200, blank=True)
     profession_patient  = models.CharField(max_length=200, blank=True)
-    current_condition   = models.CharField(max_length=200, blank=True)
+    # Free text: values reached 253 chars and crashed ingestion (2026-11-17).
+    current_condition   = models.TextField(blank=True)
     contact_number      = EncryptedCharField(blank=True)
     marital_status      = models.CharField(max_length=20, blank=True)
     age_at_marriage     = models.PositiveSmallIntegerField(null=True, blank=True)
@@ -120,14 +121,15 @@ class CIPRBFistulaCase(models.Model):
     number_of_children  = models.PositiveSmallIntegerField(null=True, blank=True)
 
     # ── Obstetric history.
-    delivery_complication       = models.CharField(max_length=200, blank=True)
+    # Free text: values reached 307 chars and crashed ingestion (2026-11-17).
+    delivery_complication       = models.TextField(blank=True)
     last_delivery_labour_duration = models.CharField(max_length=100, blank=True)
     mode_of_last_delivery       = models.CharField(max_length=30, blank=True)
     place_of_last_delivery      = models.CharField(max_length=30, blank=True)
     conducted_last_delivery     = models.CharField(max_length=30, blank=True)
     delivery_outcome            = models.CharField(max_length=20, blank=True)
     reasons_no_institutional_delivery = models.CharField(max_length=200, blank=True)
-    time_duration_fistula_occurrence  = models.CharField(max_length=100, blank=True)
+    time_duration_fistula_occurrence  = models.CharField(max_length=300, blank=True)  # was 92/100
     duration_suffering          = models.CharField(max_length=100, blank=True)
 
     # ── Stage 1: Suspected.

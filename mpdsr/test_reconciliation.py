@@ -235,3 +235,15 @@ class FetchFollowsPagination(TestCase):
                                return_value=FakeResp()):
             out = CR._fetch('uidX', 'token', limit=30)
         self.assertEqual(len(out), 30)
+
+
+class ReconcileCoversEveryCiprbFormTest(TestCase):
+    """Every CIPRB form in the replay registry must have a row counter, or the
+    hourly guard reports 'no handler/counter' and silently skips it (Safe
+    Surgery was skipped until 2026-11-17)."""
+
+    def test_every_registered_ciprb_form_has_a_counter(self):
+        from mpdsr.reconcile import _counter
+        from programs.ciprb_replay import CIPRB_SLUG_TO_UID
+        missing = [s for s in CIPRB_SLUG_TO_UID if _counter(s) is None]
+        self.assertEqual(missing, [])
