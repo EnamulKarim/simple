@@ -14,7 +14,7 @@ from .models import (
     Referral,
     StockEntry, TemperatureLog, SafetyHygieneKit, StoreRequisition,
     TrainingEvent, CoordMeeting, MobileHealthCamp, VisitorRegister,
-    PHDCounsellingReport,
+    PHDCounsellingReport, BandhuActivityReport,
 )
 from fistula.ciprb_models import CIPRBFistulaCase
 from fistula.models import FistulaCampaign
@@ -424,6 +424,14 @@ class StockEntrySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StockEntry
+        fields = '__all__'
+
+
+class BandhuActivityReportSerializer(serializers.ModelSerializer):
+    center_name = serializers.CharField(source='center.name', read_only=True)
+
+    class Meta:
+        model = BandhuActivityReport
         fields = '__all__'
 
 

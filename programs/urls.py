@@ -11,11 +11,11 @@ from .views import (
     OutreachSessionViewSet, GroupEducationSessionViewSet, WellnessLogbookEntryViewSet,
     PHDCounsellingReportViewSet,
     ReferralViewSet,
-    StockEntryViewSet, TemperatureLogViewSet,
+    StockEntryViewSet, TemperatureLogViewSet, BandhuActivityReportViewSet,
     SafetyHygieneKitViewSet, StoreRequisitionViewSet,
     TrainingEventViewSet, CoordMeetingViewSet,
     MobileHealthCampViewSet, VisitorRegisterViewSet,
-    PendingApprovalsView, NilReportView,
+    PendingApprovalsView, BulkApproveView, NilReportView,
     CIPRBFistulaCaseViewSet,
     FistulaCampaignViewSet,
     MPDSRCaseApprovalViewSet,
@@ -44,6 +44,7 @@ router.register('counselling-reports', PHDCounsellingReportViewSet,   basename='
 router.register('group-education',     GroupEducationSessionViewSet,  basename='group-education')
 router.register('referrals',           ReferralViewSet,               basename='referral')
 router.register('stock-entries',       StockEntryViewSet,             basename='stock-entry')
+router.register('activity-reports',    BandhuActivityReportViewSet,   basename='activity-report')
 router.register('temperature-logs',    TemperatureLogViewSet,         basename='temperature-log')
 router.register('hygiene-kits',        SafetyHygieneKitViewSet,       basename='hygiene-kit')
 router.register('store-requisitions',  StoreRequisitionViewSet,       basename='store-requisition')
@@ -62,5 +63,6 @@ router.register('mpdsr-actions',       MPDSRActionViewSet,            basename='
 urlpatterns = [
     path('', include(router.urls)),
     path('pending-approvals/', PendingApprovalsView.as_view(), name='pending-approvals'),
+    path('pending-approvals/bulk-approve/', BulkApproveView.as_view(), name='pending-approvals-bulk-approve'),
     path('nil-reports/', NilReportView.as_view(), name='nil-reports'),
 ]

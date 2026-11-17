@@ -40,7 +40,7 @@ from .models import (
     IECMaterial,
     StockEntry, TemperatureLog, SafetyHygieneKit, StoreRequisition,
     TrainingEvent, CoordMeeting, MobileHealthCamp, VisitorRegister,
-    NilReport, PHDCounsellingReport,
+    NilReport, PHDCounsellingReport, BandhuActivityReport,
 )
 from fistula.ciprb_models import CIPRBFistulaCase
 from fistula.models import FistulaCampaign
@@ -69,6 +69,7 @@ from .serializers import (
     SafetyHygieneKitSerializer, StoreRequisitionSerializer,
     TrainingEventSerializer, CoordMeetingSerializer,
     MobileHealthCampSerializer, VisitorRegisterSerializer,
+    BandhuActivityReportSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -659,6 +660,12 @@ class StockEntryViewSet(OrgFilteredViewSet):
         return qs
 
 
+class BandhuActivityReportViewSet(OrgFilteredViewSet):
+    """Bandhu Activity & Operations reports — detail for the approval queue."""
+    queryset = BandhuActivityReport.objects.select_related('center').all()
+    serializer_class = BandhuActivityReportSerializer
+
+
 class TemperatureLogViewSet(OrgFilteredViewSet):
     queryset = TemperatureLog.objects.select_related('center').all()
     serializer_class = TemperatureLogSerializer
@@ -734,6 +741,23 @@ def _humanise_label(text: str) -> str:
     known acronyms upper-cased (MPDSR / HIV / STI / GBV / CIPRB / …)."""
     titled = text.replace('_', ' ').title()
     return ' '.join(_LABEL_ACRONYMS.get(w, w) for w in titled.split())
+
+
+# Activity report tallies shown in the queue summary, in indicator order.
+_ACTIVITY_SUMMARY_FIELDS = [
+    ('outreach_sessions', 'outreach sessions'),
+    ('supported_clinics', 'clinics supported'),
+    ('wellness_centres_improved', 'centres improved'),
+    ('mobile_health_camps', 'health camps'),
+    ('orientation_participants', 'managers oriented'),
+    ('midwife_trainees', 'midwives trained'),
+    ('gov_ngo_meetings', 'GOB/NGO meetings'),
+    ('cbo_meetings', 'CBO meetings'),
+    ('peer_educator_participants', 'peer educators trained'),
+    ('observance_event_count', 'observance events'),
+    ('iec_sbcc_distributed', 'IEC/SBCC distributed'),
+    ('messaging_displays_installed', 'displays installed'),
+]
 
 
 def _build_summary(obj, model_type: str) -> str:
@@ -883,6 +907,14 @@ def _build_summary(obj, model_type: str) -> str:
             if (obj.reason or '').strip():
                 parts.append(obj.reason)
             return ' · '.join(p for p in parts if p)
+        if model_type == 'activity_report':
+            where = obj.center.name if obj.center_id else '–'
+            tallies = [f'{getattr(obj, field)} {label}'
+                       for field, label in _ACTIVITY_SUMMARY_FIELDS
+                       if getattr(obj, field, 0)]
+            parts = ['Activity report', where, str(obj.report_date)]
+            parts.append(', '.join(tallies[:4]) if tallies else 'all tallies 0')
+            return ' · '.join(parts)
     except Exception as exc:
         logger.warning('_build_summary(%s, pk=%s): %s', model_type, getattr(obj, 'id', '?'), exc)
     return f"{_humanise_label(model_type)} record"
@@ -1204,6 +1236,10 @@ _APPROVAL_MODELS = [
     # the first field submission would have been counted-but-invisible.
     ('iec_material',         lambda: IECMaterial.objects),
     ('gbv_corner_record',    lambda: GBVCornerRecord.objects),
+    # Bandhu aggregate Activity & Operations report (two-stage). Missing until
+    # 2026-11-17, so every Bandhu activity indicator read 0 with 39 reports
+    # stuck PENDING. test_activity_report_approval guards the whole registry.
+    ('activity_report',      lambda: BandhuActivityReport.objects),
     ('counselling_report',   lambda: PHDCounsellingReport.objects),
     ('fistula_case',         lambda: CIPRBFistulaCase.objects),
     ('fistula_campaign',     lambda: FistulaCampaign.objects),
@@ -1244,6 +1280,7 @@ _ENDPOINT_OVERRIDES = {
     'coord_meeting': 'coord-meetings',
     'mobile_camp': 'mobile-camps',
     'nil_report': 'nil-reports',
+    'activity_report': 'activity-reports',
     'fistula_case': 'fistula-cases',
     'fistula_campaign': 'fistula-campaigns',
     'mpdsr_case': 'mpdsr-cases',
@@ -1375,13 +1412,7 @@ class PendingApprovalsView(views.APIView):
         if not all([pk, model_type, action_type]):
             return Response({'detail': 'id, model_type, and action are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Find the model manager
-        model_mgr = None
-        for mt, qs_fn in _APPROVAL_MODELS:
-            if mt == model_type:
-                model_mgr = qs_fn()
-                break
-
+        model_mgr = _approval_manager(model_type)
         if model_mgr is None:
             return Response({'detail': f'Unknown model_type: {model_type}'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1451,6 +1482,94 @@ class PendingApprovalsView(views.APIView):
             logger.error('Telegram notification failed after approval: %s', exc)
 
         return Response({'status': obj.approval_status, 'id': str(obj.id)})
+
+
+def _approval_manager(model_type):
+    """The queryset for an approval-queue slug, or None if the slug is unknown."""
+    for mt, qs_fn in _APPROVAL_MODELS:
+        if mt == model_type:
+            return qs_fn()
+    return None
+
+
+# One request finalises at most this many records. Above the 200-row page the
+# queue returns per model, so a reviewer can clear what they see in one click.
+MAX_BULK_APPROVE = 500
+
+
+class BulkApproveView(views.APIView):
+    """
+    POST /api/programs/pending-approvals/bulk-approve/
+    Body: { items: [{ id, model_type }, ...] }
+
+    UNFPA stage-2 final approval for many Bandhu records at once. Only items at
+    MANAGER_APPROVED are eligible; each one still goes through _apply_decision,
+    so the two-stage rules are identical to a single click (UNFPA-only, recorded
+    under the reviewer who clicked). Items that fail are reported, not fatal:
+    the rest are still approved. One Telegram summary is sent per org instead of
+    one message per record.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        items = request.data.get('items')
+        if not isinstance(items, list) or not items:
+            return Response({'detail': 'items must be a non-empty list.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if len(items) > MAX_BULK_APPROVE:
+            return Response(
+                {'detail': f'At most {MAX_BULK_APPROVE} items per request.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        approved_by_org = {}
+        skipped = []
+        for item in items:
+            item = item if isinstance(item, dict) else {}
+            pk, model_type = item.get('id'), item.get('model_type')
+            org, detail = self._approve_one(request.user, pk, model_type)
+            if org:
+                approved_by_org[org] = approved_by_org.get(org, 0) + 1
+            else:
+                skipped.append({'id': pk, 'model_type': model_type, 'detail': detail})
+
+        self._notify(request.user, approved_by_org)
+        return Response({
+            'requested': len(items),
+            'approved': sum(approved_by_org.values()),
+            'skipped': skipped,
+        })
+
+    @staticmethod
+    def _approve_one(user, pk, model_type):
+        """Finalise one record. Returns (organisation, None) on success or
+        (None, reason) when it was left untouched."""
+        model_mgr = _approval_manager(model_type)
+        if not pk or model_mgr is None:
+            return None, 'Unknown record.'
+        with _tx.atomic():
+            try:
+                obj = model_mgr.select_for_update().get(id=pk)
+            except Exception:
+                return None, 'Record not found.'
+            if obj.approval_status != 'MANAGER_APPROVED':
+                return None, ('Bulk approval is for the UNFPA final stage only '
+                              f'(this record is {obj.approval_status}).')
+            err = _apply_decision(obj, user, 'approve', '')
+            if err is not None:
+                return None, str(err.data.get('detail', 'Not authorised.'))
+            obj.save()
+        return obj.organisation, None
+
+    @staticmethod
+    def _notify(user, approved_by_org):
+        reviewer = getattr(user, 'full_name', None) or user.email
+        for org, n in approved_by_org.items():
+            try:
+                _send_approval_telegram(
+                    org=org, form_label=f'{n} records (bulk final approval)',
+                    reviewer_name=reviewer, approved=True)
+            except Exception as exc:
+                logger.error('Telegram notification failed after bulk approval: %s', exc)
 
 
 class NilReportView(views.APIView):

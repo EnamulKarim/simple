@@ -15,6 +15,7 @@ import { api, apiErrorMessage } from '@/api/client'
 import { bandhuField, isBandhuForm, decodeBandhuValue } from '@/data/bandhuFieldLabels'
 import { useAuth } from '@/context/AuthContext'
 import { NilReportModal } from '@/components/approvals/NilReportModal'
+import { BulkFinalApprove } from '@/components/approvals/BulkFinalApprove'
 import { usePolling } from '@/hooks/usePolling'
 import { PageLoader, LoadingSpinner } from '@/components/ui/LoadingSpinner'
 import { formatDateTime } from '@/utils/format'
@@ -931,6 +932,16 @@ export default function ManagerApprovals() {
         && programsData!.items.every((it: any) => it.stage === 'unfpa') && (
           <UnfpaSummaryBanner items={allItems.filter((i) => i.kind === 'program')} />
         )}
+      {/* Mounted outside the digest gate so its result line survives the queue
+          emptying (the digest unmounts at 0). Renders nothing when there is
+          neither a stage-2 item nor a result to show. */}
+      {user?.organisation === 'UNFPA' && user.role !== 'developer' && (
+        <BulkFinalApprove
+          items={allItems.filter((i) => i.kind === 'program' && i.stage === 'unfpa')}
+          reviewerName={user.full_name || user.email}
+          onDone={refetchPrograms}
+        />
+      )}
 
       <NilReportModal open={nilOpen} onClose={() => setNilOpen(false)} onSaved={refetchPrograms} />
 
