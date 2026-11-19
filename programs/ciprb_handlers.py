@@ -442,6 +442,15 @@ def _save_mpdsr_case(payload, lat, lng, *, sub_form_type, death_type,
     # Verbatim forms name the death date 'death_date' (F01/F02/F05); F04 keeps
     # 'date_of_death'. Read either so community submissions aren't rejected.
     dod = _date(payload.get('date_of_death') or payload.get('death_date'))
+    # Form 05 makes the death date optional (behind death_datetime_recorded),
+    # so a facility neonatal death can arrive without one and used to be
+    # rejected outright. The admission date, then the ER arrival date, stands
+    # in, and the case is flagged so nobody reads it as a recorded date.
+    dod_estimated = False
+    if not dod:
+        dod = (_date(payload.get('admission_date'))
+               or _date(payload.get('er_arrival_date')))
+        dod_estimated = dod is not None
     if not (district and dod):
         return HttpResponse('Bad Request — district and date_of_death required',
                             status=400)
@@ -491,6 +500,7 @@ def _save_mpdsr_case(payload, lat, lng, *, sub_form_type, death_type,
         case.upazila = _s(payload.get('upazila'))
         case.union   = _s(payload.get('union'))
         case.date_of_death = dod
+        case.date_of_death_estimated = dod_estimated
         # Facility admission date (Form 04 only) — drives the admission→death
         # interval visual. Absent on community forms → stays null.
         adm = _date(payload.get('admission_date'))

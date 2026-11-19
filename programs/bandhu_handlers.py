@@ -846,7 +846,15 @@ def _writeback_kobo_id(asset_uid, submission_id, client_id,
         except Exception as exc:                        # noqa: BLE001
             logger.warning('Bandhu id write-back %s failed: %s', submission_id, exc)
 
-    threading.Thread(target=_run, daemon=True, name='bandhu-id-writeback').start()
+    # Only after the database work commits. Live webhooks commit, so they write
+    # back as before. A replay that rolls back (the hourly CIPRB reconciliation,
+    # audit_ciprb_gap, dry runs) discards this callback with its savepoint, so it
+    # can never stamp a ref on Kobo that SIMPLE did not keep. Before this, the
+    # reconciliation rewrote 16 Slip 01 submissions in Kobo every hour.
+    from django.db import transaction
+    transaction.on_commit(
+        lambda: threading.Thread(target=_run, daemon=True,
+                                 name='bandhu-id-writeback').start())
 
 
 # ─── Form 0: Mother List (registration → Client, auto-approved) ────────────────

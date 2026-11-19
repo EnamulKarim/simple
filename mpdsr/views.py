@@ -397,8 +397,11 @@ def mpdsr_aggregates(request):
     _adm_labels = ['<1 day', '1-2 days', '3-7 days', '7+ days']
     admission_to_death = {l: 0 for l in _adm_labels}
     admission_to_death['Unknown'] = 0
-    for adm, dod in fac_qs.values_list('admission_date', 'date_of_death'):
-        if not adm or not dod:
+    for adm, dod, est in fac_qs.values_list('admission_date', 'date_of_death',
+                                            'date_of_death_estimated'):
+        # An estimated death date IS the admission date, so its interval is
+        # meaningless; count it as Unknown rather than as a same-day death.
+        if not adm or not dod or est:
             admission_to_death['Unknown'] += 1
             continue
         days = (dod - adm).days

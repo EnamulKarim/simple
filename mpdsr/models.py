@@ -211,6 +211,9 @@ class MPDSRCase(models.Model):
     # every non-Social-Autopsy row.
     sa_death_kind = models.CharField(max_length=12, blank=True, db_index=True)
     date_of_death = models.DateField()
+    # True when the form carried no death date and the admission (or ER
+    # arrival) date was used instead. Form 05 makes the death date optional.
+    date_of_death_estimated = models.BooleanField(default=False)
     # Facility (Form 04) admission date — paired with date_of_death to derive
     # the admission→death interval (a care-timeliness signal). Nullable:
     # community Form 01 deaths have no facility admission.

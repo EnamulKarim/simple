@@ -215,17 +215,22 @@ def _replay_form(slug, uid, handler, count_fn, token, limit):
     subs = [s for s in _fetch(uid, token, limit) if _is_live(s)]
     before = count_fn()
     crashes = []
-    sp = transaction.savepoint()
-    for s in subs:
-        payload = _flatten_group_keys(s)
-        lat, lng = _geolocation(payload)
-        try:
-            with transaction.atomic():
-                handler(payload, lat, lng)
-        except Exception as exc:  # noqa: BLE001
-            crashes.append({'id': s.get('_id'), 'error': str(exc)[:160]})
-    after = count_fn()
-    transaction.savepoint_rollback(sp)   # discard everything the replay wrote
+    # atomic() + set_rollback, NOT the low-level transaction.savepoint(): Django
+    # only discards on_commit callbacks registered under an atomic block, and
+    # the handlers queue their Kobo write-backs with on_commit. A low-level
+    # savepoint rolled the rows back but let the write-backs run, which is how
+    # this replay kept rewriting refs on Kobo submissions every hour.
+    with transaction.atomic():
+        for s in subs:
+            payload = _flatten_group_keys(s)
+            lat, lng = _geolocation(payload)
+            try:
+                with transaction.atomic():
+                    handler(payload, lat, lng)
+            except Exception as exc:  # noqa: BLE001
+                crashes.append({'id': s.get('_id'), 'error': str(exc)[:160]})
+        after = count_fn()
+        transaction.set_rollback(True)   # discard everything the replay wrote
 
     stranded = max(0, after - before)
     return {
@@ -342,16 +347,18 @@ def audit_ciprb_gap(token, slugs=None, limit=None):
             payload = _flatten_group_keys(s)
             lat, lng = _geolocation(payload)
             before = count_fn()
-            sp = transaction.savepoint()
-            try:
-                with transaction.atomic():
-                    handler(payload, lat, lng)
-                after = count_fn()
-            except Exception as exc:              # noqa: BLE001
-                after = before
-                crashes.append({'id': s.get('_id'), 'date': _sub_date(s),
-                                'error': str(exc)[:160]})
-            transaction.savepoint_rollback(sp)
+            # atomic() + set_rollback so queued Kobo write-backs are discarded
+            # with the rows (see _replay_form).
+            with transaction.atomic():
+                try:
+                    with transaction.atomic():
+                        handler(payload, lat, lng)
+                    after = count_fn()
+                except Exception as exc:          # noqa: BLE001
+                    after = before
+                    crashes.append({'id': s.get('_id'), 'date': _sub_date(s),
+                                    'error': str(exc)[:160]})
+                transaction.set_rollback(True)
             if after > before:
                 missing.append({
                     'id': s.get('_id'),
