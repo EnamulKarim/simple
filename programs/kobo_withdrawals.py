@@ -250,6 +250,122 @@ def _key(model, obj):
     return '%s:%s' % (model._meta.label, obj.pk)
 
 
+# ── Records fed by several submissions ──────────────────────────────────────
+# Some rows are built from MANY Kobo submissions but keep only the latest id:
+# a CIPRB fistula patient (one row, up to five stage forms), a merged MPDSR case
+# (re-submissions of the same serial) and a CIPRB-10 action (its updates).
+# Deleting that one latest submission in Kobo is not a deletion of the record
+# while its other submissions are still live: removing the row would drop the
+# registration and every earlier stage with it. For these models we find any
+# live submission that feeds the same record; if one exists the record stays
+# and is pointed at it.
+
+def _rescue_registry():
+    """model label -> ([(form slug, payload -> key)], row -> key)."""
+    from programs.ciprb_handlers import _district, _mpdsr_hash, _norm_id, _s
+
+    def fistula(p):
+        if (_s(p.get('stage')) or '') == 'cost':   # a cost entry is not a stage
+            return None
+        return _norm_id(p.get('patient_code_final') or p.get('patient_code')
+                        or p.get('patient_code_sel')) or None
+
+    def mpdsr(sft):
+        def key(p):
+            district = _district(p)
+            if not district:
+                return None
+            serial = _s(p.get('case_serial'))
+            return (_mpdsr_hash(sft, district, serial) if serial
+                    else 'kobo:%s' % p.get('_id'))
+        return key
+
+    def social_autopsy(p):
+        slip = _s(p.get('slip_number'))
+        return ('sa:' + slip) if slip else 'kobo:%s' % p.get('_id')
+
+    def action(p):
+        code = _norm_id(p.get('ap_action_sel') or p.get('ap_action_id')
+                        or p.get('action_id'))
+        return ((_district(p) or '').lower(), code) if code else None
+
+    return {
+        'fistula.CIPRBFistulaCase': (
+            [('ciprb_fistula_questions_v1', fistula)],
+            lambda o: _norm_id(o.patient_code) or None),
+        'mpdsr.MPDSRCase': (
+            [('ciprb_mpdsr_community_maternal_v1', mpdsr('f1')),
+             ('ciprb_mpdsr_community_neonatal_v1', mpdsr('f2')),
+             ('ciprb_mpdsr_facility_maternal_v1', mpdsr('f4')),
+             ('ciprb_mpdsr_facility_neonatal_v1', mpdsr('f5')),
+             ('ciprb_social_autopsy_v1', social_autopsy)],
+            lambda o: o.case_hash or None),
+        'mpdsr.MPDSRAction': (
+            [('ciprb_mpdsr_response_plan_v1', action)],
+            lambda o: ((o.district or '').lower(), _norm_id(o.action_id))
+            if o.action_id else None),
+    }
+
+
+def rescue_multi_submission(rows, token, apply=False, stdout=None):
+    """Drop candidates that another live Kobo submission still feeds.
+
+    Returns (rows still to treat as deleted, rescued). With apply=True a rescued
+    record is pointed at the newest live submission that feeds it. A form that
+    cannot be read keeps ALL of its model's candidates out of deletion for this
+    pass: an unreadable form proves nothing, so nothing is removed on it.
+    """
+    from django.db import IntegrityError
+
+    from programs.ciprb_replay import CIPRB_SLUG_TO_UID, _fetch
+    from programs.webhook import _flatten_group_keys
+
+    say = stdout or (lambda _m: None)
+    registry = _rescue_registry()
+    by_label = {}
+    for model, ref in rows:
+        if model._meta.label in registry:
+            by_label.setdefault(model._meta.label, []).append((model, ref))
+    if not by_label:
+        return rows, []
+    token = token or _token()   # only needed once a candidate qualifies
+
+    hold, rescued = set(), []
+    for label, cands in by_label.items():
+        forms, row_key = registry[label]
+        live = {}
+        try:
+            for slug, payload_key in forms:
+                for sub in _fetch(CIPRB_SLUG_TO_UID[slug], token, None):
+                    k = payload_key(_flatten_group_keys(sub))
+                    sid = str(sub.get('_id') or '')
+                    if k is None or not sid.isdigit():
+                        continue
+                    if k not in live or int(sid) > int(live[k]):
+                        live[k] = sid
+        except Exception as exc:  # noqa: BLE001
+            say('  could not read the %s forms (%s); keeping its %d candidate(s)'
+                ' this pass' % (label, exc, len(cands)))
+            hold.update(_key(m, o) for m, o in cands)
+            continue
+        for model, ref in cands:
+            obj = model.objects.filter(pk=ref.pk).first()
+            k = row_key(obj) if obj is not None else None
+            if k is None or k not in live:
+                continue
+            hold.add(_key(model, ref))
+            rescued.append((label, str(ref.pk), str(ref.kobo_submission_id),
+                            live[k]))
+            if apply:
+                try:
+                    with transaction.atomic():
+                        model.objects.filter(pk=ref.pk).update(
+                            kobo_submission_id=live[k])
+                except IntegrityError:
+                    pass   # another row holds that id; keep the record as is
+    return [(m, o) for m, o in rows if _key(m, o) not in hold], rescued
+
+
 def reconcile(apply=False, actor='', max_delete=MAX_DELETE, force=False,
               org=None, stdout=None):
     """One full pass. Returns a plain dict so callers can report it."""
@@ -259,6 +375,11 @@ def reconcile(apply=False, actor='', max_delete=MAX_DELETE, force=False,
     say('  %d submissions live across %d forms' % (len(live), len(per_asset)))
 
     rows = find_withdrawn(live, org=org)
+    rows, rescued = rescue_multi_submission(rows, None, apply=apply,
+                                            stdout=say)
+    if rescued:
+        say('  %d record(s) kept: another live submission still feeds them'
+            % len(rescued))
     repeat, _seen = confirmed_missing(rows, org=org)
     result = {
         'checked_at': timezone.now().isoformat(),
@@ -270,6 +391,7 @@ def reconcile(apply=False, actor='', max_delete=MAX_DELETE, force=False,
         'candidate_keys': [_key(m, o) for m, o in rows],
         'confirmed': [(m._meta.label, str(o.pk), str(o.kobo_submission_id))
                       for m, o in repeat],
+        'rescued': rescued,
         'deleted': [],
         'blocked': [],
         'applied': bool(apply),

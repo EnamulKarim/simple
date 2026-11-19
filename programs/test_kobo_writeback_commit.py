@@ -65,6 +65,24 @@ class WritebackCommitTest(TestCase):
         self.assertEqual(callbacks, [])
         thread.assert_not_called()
 
+    def test_reconcile_skips_a_record_deleted_from_the_dashboard(self):
+        """Deleting from the approval queue keeps the Kobo copy on purpose.
+        That submission is a decision, not a gap, so the hourly check must
+        not keep reporting it as stranded."""
+        from programs.models import KoboWithdrawal
+        KoboWithdrawal.objects.create(
+            model_label='mpdsr.MPDSRDeathNotification', record_pk='x',
+            kobo_submission_id='920001', organisation='CIPRB',
+            approval_status='PENDING', snapshot={},
+            actor='manager@example.org', reason='wrong entry')
+        with mock.patch('mpdsr.reconcile._fetch', return_value=[_slip_sub()]):
+            with transaction.atomic():
+                rec = _replay_form(SLIP01, 'assetuid', FORM_HANDLERS[SLIP01],
+                                   _counter(SLIP01), 'tok', None)
+        self.assertEqual(rec['stranded'], 0)
+        self.assertEqual(rec['kobo_count'], 0)
+        self.assertEqual(rec['deleted_in_dashboard'], 1)
+
     def test_gap_audit_does_not_write_to_kobo(self):
         from mpdsr.reconcile import audit_ciprb_gap
         with mock.patch('mpdsr.reconcile._fetch', return_value=[_slip_sub()]), \

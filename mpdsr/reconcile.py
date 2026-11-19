@@ -209,10 +209,28 @@ def discover_partner_forms(token):
     return out
 
 
+def _deleted_in_dashboard():
+    """Kobo ids of records a named user deleted from the approval queue.
+
+    Only deletions by a person (actor is an email address) count. The automatic
+    Kobo sync and system clean-ups are excluded: their records were removed for
+    other reasons and some were later restored, so they must stay checked."""
+    from programs.models import KoboWithdrawal
+    return set(KoboWithdrawal.objects
+               .filter(actor__contains='@')
+               .exclude(kobo_submission_id='')
+               .values_list('kobo_submission_id', flat=True))
+
+
 def _replay_form(slug, uid, handler, count_fn, token, limit):
     """One form's replay inside a rolled-back savepoint. Shared by the CIPRB
     registry and the discovered partner forms so the semantics cannot drift."""
-    subs = [s for s in _fetch(uid, token, limit) if _is_live(s)]
+    fetched = [s for s in _fetch(uid, token, limit) if _is_live(s)]
+    # A person deleting a record from the approval queue keeps its Kobo copy on
+    # purpose (the raw evidence). That submission is a decision, not a gap, so
+    # it is left out instead of being reported as stranded every hour.
+    gone = _deleted_in_dashboard()
+    subs = [s for s in fetched if str(s.get('_id')) not in gone]
     before = count_fn()
     crashes = []
     # atomic() + set_rollback, NOT the low-level transaction.savepoint(): Django
@@ -237,6 +255,7 @@ def _replay_form(slug, uid, handler, count_fn, token, limit):
         'slug': slug,
         'uid': uid,
         'kobo_count': len(subs),
+        'deleted_in_dashboard': len(fetched) - len(subs),
         'app_rows': before,
         # Rows the handlers had to create = submissions missing from the app.
         'stranded': stranded,
